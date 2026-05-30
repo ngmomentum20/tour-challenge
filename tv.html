@@ -1750,8 +1750,10 @@ async function refresh() {
 function renderNoPoolEvent(appData) {
   const el = document.getElementById('poolList');
 
-  // Find next upcoming event
-  const completedIds = new Set((appData?.completedEvents || []).map(e => e.eventId));
+  // Find next upcoming event (fallback: Masters and PGA are done)
+  const FALLBACK_COMPLETED_IDS = [5, 8];
+  const completedFromSheet = (appData?.completedEvents || []).map(e => e.eventId);
+  const completedIds = new Set(completedFromSheet.length > 0 ? completedFromSheet : FALLBACK_COMPLETED_IDS);
   const nextEvent = SEASON_EVENTS_TV.find(e => !completedIds.has(e.id));
 
   let html = '<div style="padding: 1.5rem; text-align: center;">';
