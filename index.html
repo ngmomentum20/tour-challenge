@@ -975,19 +975,18 @@ let ACTIVE_EVENT = null; // { eventId, deadline }
 const FALLBACK_MEMBERS = ['Nick', 'Mike', 'Brandon', 'Jason'];
 const FALLBACK_COMPLETED = [
   {
-    eventId: 5,
+    eventId: 5, // Masters — Nick wins
     results: [
-      { name: 'Nick',    poolFinish: 2, rawScore: 42 },
-      { name: 'Mike',    poolFinish: 3, rawScore: 58 },
-      { name: 'Brandon', poolFinish: 1, rawScore: 38 },
-      { name: 'Jason',   poolFinish: 4, rawScore: 54 }
+      { name: 'Nick',    poolFinish: 1, rawScore: 18 },
+      { name: 'Brandon', poolFinish: 2, rawScore: 53 },
+      { name: 'Mike',    poolFinish: 3, rawScore: 63 }
     ]
   },
   {
-    eventId: 8,
+    eventId: 8, // PGA Championship — Mike wins via tiebreaker
     results: [
-      { name: 'Nick',    poolFinish: 2, rawScore: 53 },
       { name: 'Mike',    poolFinish: 1, rawScore: 53 },
+      { name: 'Nick',    poolFinish: 2, rawScore: 53 },
       { name: 'Brandon', poolFinish: 3, rawScore: 60 },
       { name: 'Jason',   poolFinish: 4, rawScore: 72 }
     ]
