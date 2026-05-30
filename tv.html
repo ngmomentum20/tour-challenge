@@ -1389,13 +1389,29 @@ function renderGrandSlam(currentStandings) {
 function generateTickerItems(standings) {
   const items = [];
 
-  // Tournament leader
-  if (tournamentData && tournamentData.competitors.length > 0) {
-    const leader = tournamentData.competitors[0];
-    items.push({ icon: '&#127942;', text: `Tournament Leader: <span class="ticker-highlight">${leader.name}</span> (${leader.scoreToPar}) thru ${leader.thru}` });
+  // Current ESPN tournament info (always relevant)
+  if (tournamentData) {
+    const tName = tournamentData.name || 'PGA Tour';
+    const tCourse = tournamentData.course || '';
+    const round = tournamentData.round;
+
+    if (tournamentData.competitors.length > 0) {
+      const leader = tournamentData.competitors[0];
+      items.push({ icon: '&#9971;', text: `${tName} Leader: <span class="ticker-highlight">${leader.name}</span> (${leader.scoreToPar}) thru ${leader.thru}` });
+    }
+
+    if (tournamentData.competitors.length >= 5) {
+      const top5 = tournamentData.competitors.slice(0, 5).map(c => c.name.split(' ').pop()).join(', ');
+      items.push({ icon: '&#127942;', text: `Top 5: <span class="ticker-highlight">${top5}</span>` });
+    }
+
+    if (round) {
+      const roundNames = { 1: 'Thursday', 2: 'Friday', 3: 'Saturday (Moving Day)', 4: 'Championship Sunday' };
+      items.push({ icon: '&#128197;', text: `Round ${round} ${roundNames[round] ? '— ' + roundNames[round] : ''}${tCourse ? ' at ' + tCourse : ''}` });
+    }
   }
 
-  // Pool standings updates
+  // Pool-specific items (only when active event with standings)
   if (standings && standings.length > 0) {
     items.push({ icon: '&#127941;', text: `Pool Leader: <span class="ticker-highlight">${standings[0].name}</span> with ${standings[0].totalPoints} pts` });
 
@@ -1407,10 +1423,8 @@ function generateTickerItems(standings) {
         items.push({ icon: '&#128200;', text: `${standings[0].name} leads ${standings[1].name} by <span class="ticker-highlight">${gap} points</span>` });
       }
     }
-  }
 
-  // Best performing golfers from pool picks
-  if (standings) {
+    // Best/worst performing picks
     const allGolfers = [];
     standings.forEach(s => {
       s.golfers.forEach(g => {
@@ -1424,41 +1438,29 @@ function generateTickerItems(standings) {
       const best = allGolfers[0];
       items.push({ icon: '&#128293;', text: `Hot Pick: <span class="ticker-highlight">${best.name}</span> (${best.pos}) earning ${best.points} pts for ${best.owner}` });
     }
-    if (allGolfers.length > 2) {
-      const worst = allGolfers[allGolfers.length - 1];
-      items.push({ icon: '&#128556;', text: `Struggling: ${worst.name} (${worst.pos}) costing ${worst.owner} ${worst.points} pts` });
-    }
-  }
 
-  // Top 5 leaderboard summary
-  if (tournamentData && tournamentData.competitors.length >= 5) {
-    const top5 = tournamentData.competitors.slice(0, 5).map(c => c.name.split(' ').pop()).join(', ');
-    items.push({ icon: '&#9971;', text: `Top 5: <span class="ticker-highlight">${top5}</span>` });
-  }
-
-  // Round info
-  if (tournamentData) {
-    const round = tournamentData.round;
-    const roundNames = { 1: 'Thursday', 2: 'Friday', 3: 'Saturday (Moving Day)', 4: 'Championship Sunday' };
-    items.push({ icon: '&#128197;', text: `Round ${round} ${roundNames[round] ? '— ' + roundNames[round] : ''} at Aronimink Golf Club` });
-  }
-
-  // Grand Slam note
-  if (GRAND_SLAM.mastersWinner) {
-    items.push({ icon: '&#127811;', text: `Masters Champion: <span class="ticker-highlight">${GRAND_SLAM.mastersWinner}</span> — Can he make it 2 for 2?` });
-  }
-
-  // Movement notes
-  if (standings && Object.keys(previousStandings).length > 0) {
-    for (const s of standings) {
-      const prev = previousStandings[s.name];
-      if (prev && prev > s.rank) {
-        items.push({ icon: '&#128640;', text: `<span class="ticker-highlight">${s.name}</span> moves up from #${prev} to #${s.rank}!` });
+    // Movement notes
+    if (Object.keys(previousStandings).length > 0) {
+      for (const s of standings) {
+        const prev = previousStandings[s.name];
+        if (prev && prev > s.rank) {
+          items.push({ icon: '&#128640;', text: `<span class="ticker-highlight">${s.name}</span> moves up from #${prev} to #${s.rank}!` });
+        }
       }
     }
   }
 
-  // === ESPN GOLF NEWS ===
+  // Off-week: show next Tour Challenge event
+  if (!standings) {
+    const FALLBACK_DONE = [5, 8];
+    const nextEv = SEASON_EVENTS_TV.find(e => !FALLBACK_DONE.includes(e.id));
+    if (nextEv) {
+      items.push({ icon: '&#9971;', text: `Next Tour Challenge Event: <span class="ticker-highlight">${nextEv.name}</span> — ${nextEv.dates}` });
+    }
+    items.push({ icon: '&#127942;', text: `Tour Challenge 2026 — 9 events remaining` });
+  }
+
+  // ESPN Golf News (always)
   if (espnNewsItems.length > 0) {
     for (const headline of espnNewsItems) {
       items.push({ icon: '&#128240;', text: `<span class="ticker-news">${headline}</span>`, isNews: true });
