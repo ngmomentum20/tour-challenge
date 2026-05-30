@@ -794,8 +794,8 @@ html, body {
 <!-- Top Bar -->
 <div class="top-bar">
   <div class="top-bar-left">
-    <h1>The PGA Championship Pool</h1>
-    <span class="event-info">Aronimink Golf Club &bull; May 14&ndash;17, 2026</span>
+    <h1>Tour Challenge</h1>
+    <span class="event-info" id="headerEventInfo">2026 Season</span>
   </div>
   <div class="top-bar-right">
     <div class="status-badge live" id="statusBadge">
@@ -860,7 +860,7 @@ html, body {
 <div class="champion-overlay" id="championOverlay">
   <div class="champion-card">
     <div class="trophy">&#127941;</div>
-    <div class="ch-label">2026 PGA Championship Pool Champion</div>
+    <div class="ch-label">Tour Challenge Event Champion</div>
     <div class="ch-name" id="chName"></div>
     <div class="ch-score" id="chScore"></div>
   </div>
@@ -872,7 +872,7 @@ html, body {
 // ============================================================
 // CONFIG
 // ============================================================
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx39kPOIqYc6yZi-sK9dT2Ha-eVUq0G-BpYF4CTUoujevCgu_PujDS3SEIPSgbKziAz/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzGB4PdeWLMuxChax8kuOXHf5ZsbhXqVmoxJgKEZdSZi948vQpOKfmv-6L_deQR3-kA/exec';
 const DEADLINE = new Date('2026-05-15T04:00:00Z');
 const SATURDAY_LEADER = null; // e.g. 'Scottie Scheffler' — set after R3 ends
 const REFRESH_INTERVAL = 5 * 60 * 1000;
@@ -1060,9 +1060,10 @@ function normalizeName(name) {
 // ============================================================
 // FETCH DATA
 // ============================================================
-async function fetchPoolEntries() {
+async function fetchPoolEntries(eventId) {
   try {
-    const resp = await fetch(`${APPS_SCRIPT_URL}?action=getPicks`);
+    const url = eventId ? `${APPS_SCRIPT_URL}?action=getPicks&eventId=${eventId}` : `${APPS_SCRIPT_URL}?action=getPicks`;
+    const resp = await fetch(url);
     return await resp.json();
   } catch (err) {
     console.error('Pool fetch failed:', err);
@@ -1077,11 +1078,8 @@ async function fetchESPNData() {
     const events = data.events || [];
     let ev = null;
 
-    for (const event of events) {
-      const name = (event.name || '').toLowerCase();
-      if (name.includes('pga champ') || name.includes('aronimink') || name.includes('pga')) { ev = event; break; }
-    }
-    if (!ev && events.length > 0) ev = events[0];
+    // Show whatever tournament is currently active on the PGA Tour
+    if (events.length > 0) ev = events[0];
     if (!ev) return null;
 
     const comp = ev.competitions?.[0];
@@ -1675,38 +1673,140 @@ function launchConfetti() {
 // ============================================================
 // REFRESH
 // ============================================================
+// Season events for "next up" display
+const SEASON_EVENTS_TV = [
+  { id: 5,  name: 'The Masters',              dates: 'Apr 10-13',  type: 'Major 3x' },
+  { id: 8,  name: 'PGA Championship',         dates: 'May 15-18',  type: 'Major 3x' },
+  { id: 9,  name: 'Memorial Tournament',      dates: 'Jun 5-8',    type: 'Signature 1x' },
+  { id: 10, name: 'U.S. Open',                dates: 'Jun 19-22',  type: 'Major 3x' },
+  { id: 11, name: 'Travelers Championship',   dates: 'Jun 26-29',  type: 'Signature 1x' },
+  { id: 12, name: 'The Open Championship',    dates: 'Jul 16-19',  type: 'Major 3x' },
+  { id: 13, name: 'FedEx St. Jude',           dates: 'Aug 14-17',  type: 'Playoff 2x' },
+  { id: 14, name: 'BMW Championship',         dates: 'Aug 21-24',  type: 'Playoff 2x' },
+  { id: 15, name: 'Tour Championship',        dates: 'Sep 4-7',    type: 'Playoff 2x' }
+];
+
 async function refresh() {
-  const [poolData, _, __] = await Promise.all([
-    fetchPoolEntries(),
+  // Fetch app config to check for active event
+  let appData = null;
+  try {
+    const configResp = await fetch(`${APPS_SCRIPT_URL}?action=getAppData`);
+    appData = await configResp.json();
+  } catch (err) { console.log('Config fetch failed'); }
+
+  const hasActiveEvent = appData && appData.activeEvent && appData.activeEvent.eventId > 0;
+
+  // Always fetch ESPN and news
+  await Promise.all([
     fetchESPNData().then(d => { tournamentData = d; }),
     fetchESPNNews()
   ]);
 
-  // Update status
+  // Update status badge
   if (tournamentData) {
     let statusText = tournamentData.isComplete ? 'Final' :
       tournamentData.round ? `Round ${tournamentData.round}` : 'Upcoming';
     document.getElementById('statusText').textContent = statusText;
   }
 
-  if (poolData && poolData.entries && poolData.entries.length > 0 && poolData.entries[0].picks) {
-    const standings = calculateStandings(poolData.entries);
-    renderPool(standings);
-    renderTournament();
-    renderGrandSlam(standings);
-    renderTicker(standings);
-
-    if (tournamentData && tournamentData.isComplete && !isTournamentComplete) {
-      isTournamentComplete = true;
-      showChampion(standings);
+  // Update header event info
+  if (hasActiveEvent) {
+    const evDef = SEASON_EVENTS_TV.find(e => e.id === appData.activeEvent.eventId);
+    if (evDef) {
+      document.getElementById('headerEventInfo').textContent = `${evDef.name} • ${evDef.dates}`;
     }
-  } else if (tournamentData) {
-    renderTournament();
-    renderGrandSlam(null);
-    renderAwards(null);
-    renderTicker(null);
-    document.getElementById('poolList').innerHTML = '<div class="loading-center">Picks locked at tee-off</div>';
+  } else {
+    document.getElementById('headerEventInfo').textContent = '2026 Season';
   }
+
+  // Always render the ESPN tournament leaderboard on the right
+  if (tournamentData) {
+    renderTournament();
+  }
+
+  if (hasActiveEvent) {
+    // Active pool event — fetch picks and show standings
+    const poolData = await fetchPoolEntries();
+
+    if (poolData && poolData.entries && poolData.entries.length > 0 && poolData.entries[0].picks) {
+      const standings = calculateStandings(poolData.entries);
+      renderPool(standings);
+      renderGrandSlam(standings);
+      renderTicker(standings);
+
+      if (tournamentData && tournamentData.isComplete && !isTournamentComplete) {
+        isTournamentComplete = true;
+        showChampion(standings);
+      }
+    } else {
+      renderNoPoolEvent(appData);
+    }
+  } else {
+    // No active pool event — show season standings + next event
+    renderNoPoolEvent(appData);
+  }
+}
+
+function renderNoPoolEvent(appData) {
+  const el = document.getElementById('poolList');
+
+  // Find next upcoming event
+  const completedIds = new Set((appData?.completedEvents || []).map(e => e.eventId));
+  const nextEvent = SEASON_EVENTS_TV.find(e => !completedIds.has(e.id));
+
+  let html = '<div style="padding: 1.5rem; text-align: center;">';
+
+  if (nextEvent) {
+    html += `
+      <div style="font-size: 0.65rem; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 0.15em; margin-bottom: 0.5rem;">Next Tour Challenge Event</div>
+      <div style="font-family: Playfair Display, serif; font-size: 1.3rem; color: var(--gold); margin-bottom: 0.3rem;">${nextEvent.name}</div>
+      <div style="font-size: 0.75rem; color: rgba(255,255,255,0.6);">${nextEvent.dates} &middot; ${nextEvent.type}</div>
+    `;
+  } else {
+    html += '<div style="font-family: Playfair Display, serif; font-size: 1.1rem; color: var(--gold);">Season Complete</div>';
+  }
+
+  // Show season standings if we have results
+  if (appData?.completedEvents?.length > 0) {
+    const POOL_FINISH_PTS = { 1: 10, 2: 7, 3: 5, 4: 3, 5: 2, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1 };
+    const EVENT_MULTS = { 5: 3, 8: 3, 9: 1, 10: 3, 11: 1, 12: 3, 13: 2, 14: 2, 15: 2 };
+    const totals = {};
+
+    appData.completedEvents.forEach(ev => {
+      const mult = EVENT_MULTS[ev.eventId] || 1;
+      ev.results.forEach(r => {
+        if (!totals[r.name]) totals[r.name] = { points: 0, wins: 0 };
+        totals[r.name].points += (POOL_FINISH_PTS[r.poolFinish] || 0) * mult;
+        if (r.poolFinish === 1) totals[r.name].wins++;
+      });
+    });
+
+    const sorted = Object.entries(totals).sort((a, b) => b[1].points - a[1].points);
+
+    html += '<div style="margin-top: 1rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 0.75rem;">';
+    html += '<div style="font-size: 0.6rem; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 0.5rem;">Season Standings</div>';
+
+    sorted.forEach(([name, data], i) => {
+      const isLeader = i === 0;
+      html += `
+        <div style="display: flex; align-items: center; padding: 0.4rem 0; gap: 0.5rem; ${isLeader ? 'color: var(--gold);' : 'color: rgba(255,255,255,0.8);'}">
+          <span style="font-family: Playfair Display, serif; font-size: 1rem; font-weight: 700; width: 1.5rem; text-align: center;">${i + 1}</span>
+          <span style="flex: 1; font-weight: 600; font-size: 0.85rem;">${name}</span>
+          <span style="font-size: 0.65rem; color: rgba(255,255,255,0.5);">${data.wins}W</span>
+          <span style="font-family: Playfair Display, serif; font-size: 1rem; font-weight: 700;">${data.points}</span>
+        </div>
+      `;
+    });
+
+    html += '</div>';
+  }
+
+  html += '</div>';
+  el.innerHTML = html;
+
+  // Update grand slam and ticker for off-week
+  renderGrandSlam(null);
+  renderTicker(null);
 }
 
 // ============================================================
