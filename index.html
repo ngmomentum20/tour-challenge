@@ -923,7 +923,7 @@ svg.inline-icon.icon-dark { stroke: var(--pga-dark); }
 // ============================================================
 // CONFIG
 // ============================================================
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxHPPg8jNRZZWv2JblAXAsuO5Wlvz7PFhT7L948Im4SZUhieys1lFPNpO-8J0FTbO_S/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzGB4PdeWLMuxChax8kuOXHf5ZsbhXqVmoxJgKEZdSZi948vQpOKfmv-6L_deQR3-kA/exec';
 
 const SEASON_YEAR = 2026;
 
@@ -962,23 +962,20 @@ const SEASON_EVENTS = [
 ];
 
 // ============================================================
-// POOL MEMBERS & SEASON DATA (backfilled + live)
+// DYNAMIC DATA — loaded from Google Sheet on page load
 // ============================================================
-const POOL_MEMBERS = ['Nick', 'Mike', 'Brandon', 'Jason'];
+// These are populated by fetchAppData() on init.
+// No more editing this file for new events!
+let POOL_MEMBERS = [];
+let MY_GUY_PICKS = {};
+let COMPLETED_EVENTS = [];
+let ACTIVE_EVENT = null; // { eventId, deadline }
 
-// My Guy draft picks (to be set after draft)
-const MY_GUY_PICKS = {
-  Nick: null,     // e.g. 'Scottie Scheffler'
-  Mike: null,     // e.g. 'Xander Schauffele'
-  Brandon: null,  // e.g. 'Rory McIlroy'
-  Jason: null
-};
-
-// Backfilled results for completed events
-// Each entry: { eventId, results: [{ name, poolFinish, rawScore }], predictions: {} }
-const COMPLETED_EVENTS = [
+// Fallback data in case the Sheet hasn't been set up yet
+const FALLBACK_MEMBERS = ['Nick', 'Mike', 'Brandon', 'Jason'];
+const FALLBACK_COMPLETED = [
   {
-    eventId: 5, // Masters
+    eventId: 5,
     results: [
       { name: 'Nick',    poolFinish: 2, rawScore: 42 },
       { name: 'Mike',    poolFinish: 3, rawScore: 58 },
@@ -987,15 +984,52 @@ const COMPLETED_EVENTS = [
     ]
   },
   {
-    eventId: 8, // PGA Championship
+    eventId: 8,
     results: [
       { name: 'Nick',    poolFinish: 2, rawScore: 53 },
-      { name: 'Mike',    poolFinish: 1, rawScore: 53 }, // Won via tiebreaker
+      { name: 'Mike',    poolFinish: 1, rawScore: 53 },
       { name: 'Brandon', poolFinish: 3, rawScore: 60 },
       { name: 'Jason',   poolFinish: 4, rawScore: 72 }
     ]
   }
 ];
+
+async function fetchAppData() {
+  try {
+    const resp = await fetch(`${APPS_SCRIPT_URL}?action=getAppData`);
+    const data = await resp.json();
+
+    if (data.error) throw new Error(data.error);
+
+    // Populate from Sheet
+    if (data.members && data.members.length > 0) {
+      POOL_MEMBERS = data.members;
+    } else {
+      POOL_MEMBERS = FALLBACK_MEMBERS;
+    }
+
+    if (data.completedEvents && data.completedEvents.length > 0) {
+      COMPLETED_EVENTS = data.completedEvents;
+    } else {
+      COMPLETED_EVENTS = FALLBACK_COMPLETED;
+    }
+
+    if (data.myGuyPicks) {
+      MY_GUY_PICKS = data.myGuyPicks;
+    }
+
+    if (data.activeEvent) {
+      ACTIVE_EVENT = data.activeEvent;
+    }
+
+    return true;
+  } catch (err) {
+    console.log('Using fallback data:', err.message);
+    POOL_MEMBERS = FALLBACK_MEMBERS;
+    COMPLETED_EVENTS = FALLBACK_COMPLETED;
+    return false;
+  }
+}
 
 // ============================================================
 // COMPUTED SEASON DATA
@@ -1339,14 +1373,8 @@ function renderHistory() {
   }).join('');
 }
 
-// ============================================================
-// ACTIVE EVENT CONFIG — set these for each event
-// ============================================================
-// Set to null when no event is active (between events)
-const ACTIVE_EVENT = null; // e.g. { eventId: 9, deadline: '2026-06-05T04:00:00Z' }
-
-// ESPN leaderboard ID for the active event (from ESPN API)
-const ESPN_LEADERBOARD_ID = null; // e.g. '401580340'
+// ACTIVE_EVENT is now loaded dynamically from the Google Sheet.
+// No need to edit this file for new events!
 
 // ============================================================
 // PICKS FORM
@@ -1741,11 +1769,15 @@ function handleHash() {
 }
 
 // ============================================================
-// INIT
+// INIT — fetch data from Google Sheet, then render
 // ============================================================
 window.addEventListener('hashchange', handleHash);
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Fetch live data from Google Sheet (falls back to hardcoded if unavailable)
+  await fetchAppData();
+
+  // Render the hub with live data
   renderHub();
   handleHash();
 });
