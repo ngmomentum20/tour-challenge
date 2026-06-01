@@ -1962,6 +1962,10 @@ async function renderPicks() {
           <div class="pick-label">Passcode</div>
           <input type="password" class="pick-input" id="pickPasscode" placeholder="Your passcode" ${!open ? 'disabled' : ''}>
         </div>
+      </div>
+      <div style="text-align:center; margin-bottom:0.75rem;">
+        <button class="load-picks-btn" onclick="loadMyPicks()" style="background:none; border:1.5px solid var(--cream-dark); border-radius:8px; padding:0.4rem 1rem; font-family:'DM Sans',sans-serif; font-size:0.7rem; color:var(--pga-dark); cursor:pointer; font-weight:600;">Load My Existing Picks</button>
+        <div id="loadPicksMsg" style="font-size:0.65rem; color:var(--text-light); margin-top:0.3rem;"></div>
       </div>`;
 
   if (isQuickPick && field && field.golfers) {
@@ -2060,6 +2064,22 @@ async function renderPicks() {
       </div>
     </div>`;
 
+  // My Guy selection — only shows if user hasn't locked one in yet
+  // After loading picks, if myGuy is already set, this section gets hidden
+  formHTML += `
+    <div class="tb-section" style="margin-top:0.6rem; display:none;" id="myGuySection">
+      <h3>My Guy — Season-Long Pick</h3>
+      <p style="font-size:0.65rem; color:var(--text-light); margin-bottom:0.4rem;">Choose one PGA Tour player as your guy for the entire season. You earn bonus points when they perform well: Win +5, Top 5 +3, Top 10 +1. Once set, this is locked for the season.</p>
+      <div class="pick-section">
+        <div class="pick-label">My Guy</div>
+        <input type="text" class="pick-input" id="myGuyPick" placeholder="e.g. Scottie Scheffler" ${!open ? 'disabled' : ''}>
+      </div>
+    </div>
+    <div class="tb-section" style="margin-top:0.6rem; display:none;" id="myGuyLocked">
+      <h3>My Guy — Locked In</h3>
+      <p style="font-size:0.72rem; color:var(--pga-dark); font-weight:600;" id="myGuyLockedName"></p>
+    </div>`;
+
   formHTML += `
       <button class="submit-btn" id="submitPicks" ${!open ? 'disabled data-closed="1"' : 'disabled'} onclick="submitPicks()">
         ${open ? 'Submit Picks' : 'Picks Closed'}
@@ -2071,6 +2091,97 @@ async function renderPicks() {
 
   // For quick pick, the submit button starts disabled until 3 are selected
   if (isQuickPick && field) updatePickCards();
+
+  // Show My Guy section by default for first-time users (hidden until they load or it's their first time)
+  // If we have no My Guy data loaded at all, show the picker
+  if (Object.keys(MY_GUY_PICKS).length === 0) {
+    document.getElementById('myGuySection').style.display = 'block';
+  }
+}
+
+async function checkMyGuyStatus(name, passcode) {
+  // Check if this user already has a My Guy set in the Members sheet
+  const myGuySection = document.getElementById('myGuySection');
+  const myGuyLocked = document.getElementById('myGuyLocked');
+
+  // Check against locally loaded MY_GUY_PICKS first
+  if (MY_GUY_PICKS[name]) {
+    myGuySection.style.display = 'none';
+    myGuyLocked.style.display = 'block';
+    document.getElementById('myGuyLockedName').textContent = MY_GUY_PICKS[name];
+    return;
+  }
+
+  // If not in local data, show the picker so they can set one
+  myGuySection.style.display = 'block';
+  myGuyLocked.style.display = 'none';
+}
+
+async function loadMyPicks() {
+  const name = document.getElementById('pickName')?.value?.trim();
+  const passcode = document.getElementById('pickPasscode')?.value?.trim();
+  const msgEl = document.getElementById('loadPicksMsg');
+
+  if (!name || !passcode) {
+    msgEl.textContent = 'Enter your name and passcode above first.';
+    msgEl.style.color = 'var(--red)';
+    return;
+  }
+
+  msgEl.textContent = 'Loading...';
+  msgEl.style.color = 'var(--text-light)';
+
+  try {
+    const resp = await fetch(`${APPS_SCRIPT_URL}?action=loadEntry&eventId=${ACTIVE_EVENT.eventId}&name=${encodeURIComponent(name)}&passcode=${encodeURIComponent(passcode)}`);
+    const data = await resp.json();
+
+    if (data.error) {
+      msgEl.textContent = data.error;
+      msgEl.style.color = 'var(--red)';
+      return;
+    }
+
+    if (data.success && data.entry) {
+      const entry = data.entry;
+      msgEl.textContent = 'Picks loaded! Update and resubmit to change.';
+      msgEl.style.color = 'var(--green)';
+
+      // Populate Quick Pick selections from saved data
+      if (entry.format === 'quick' || entry.qp1) {
+        quickPickSelections = [entry.qp1, entry.qp2, entry.qp3].filter(Boolean);
+        updatePickCards();
+      }
+
+      // Populate Full Draft fields
+      if (entry.tier1) document.getElementById('tier1') && (document.getElementById('tier1').value = entry.tier1);
+      if (entry.tier2a) document.getElementById('tier2a') && (document.getElementById('tier2a').value = entry.tier2a);
+      if (entry.tier2b) document.getElementById('tier2b') && (document.getElementById('tier2b').value = entry.tier2b);
+      if (entry.tier3a) document.getElementById('tier3a') && (document.getElementById('tier3a').value = entry.tier3a);
+      if (entry.tier3b) document.getElementById('tier3b') && (document.getElementById('tier3b').value = entry.tier3b);
+      if (entry.tier4a) document.getElementById('tier4a') && (document.getElementById('tier4a').value = entry.tier4a);
+      if (entry.tier4b) document.getElementById('tier4b') && (document.getElementById('tier4b').value = entry.tier4b);
+      if (entry.tier5) document.getElementById('tier5') && (document.getElementById('tier5').value = entry.tier5);
+      if (entry.tbScore) document.getElementById('tbScore') && (document.getElementById('tbScore').value = entry.tbScore);
+      if (entry.tbPlayoff) document.getElementById('tbPlayoff') && (document.getElementById('tbPlayoff').value = entry.tbPlayoff);
+      if (entry.tbLeader) document.getElementById('tbLeader') && (document.getElementById('tbLeader').value = entry.tbLeader);
+
+      // Populate bonus predictions
+      if (entry.bonusWinner) document.getElementById('bonusWinner') && (document.getElementById('bonusWinner').value = entry.bonusWinner);
+      if (entry.bonusScore) document.getElementById('bonusScore') && (document.getElementById('bonusScore').value = entry.bonusScore);
+      if (entry.bonusLeaderHolds) document.getElementById('bonusLeaderHolds') && (document.getElementById('bonusLeaderHolds').value = entry.bonusLeaderHolds);
+
+      // Check My Guy status from loaded member data
+      checkMyGuyStatus(name, passcode);
+    } else {
+      msgEl.textContent = 'No picks found yet — make your selections below!';
+      msgEl.style.color = 'var(--text-light)';
+      // First-time user: show My Guy section
+      document.getElementById('myGuySection').style.display = 'block';
+    }
+  } catch (err) {
+    msgEl.textContent = 'Network error. Try again.';
+    msgEl.style.color = 'var(--red)';
+  }
 }
 
 async function submitPicks() {
@@ -2123,6 +2234,7 @@ async function submitPicks() {
   payload.bonusWinner = document.getElementById('bonusWinner')?.value?.trim() || '';
   payload.bonusScore = document.getElementById('bonusScore')?.value?.trim() || '';
   payload.bonusLeaderHolds = document.getElementById('bonusLeaderHolds')?.value || '';
+  payload.myGuy = document.getElementById('myGuyPick')?.value?.trim() || '';
 
   btn.disabled = true;
   btn.textContent = 'Submitting...';
@@ -2179,13 +2291,30 @@ async function renderLeaderboard() {
   const container = document.getElementById('lbContent');
   const evDef = getActiveEventDef();
 
-  if (!evDef || !APPS_SCRIPT_URL || APPS_SCRIPT_URL === 'YOUR_APPS_SCRIPT_URL') {
+  // No active event at all
+  if (!evDef) {
     const completedIds = new Set(COMPLETED_EVENTS.map(e => e.eventId));
     const nextEvent = SEASON_EVENTS.find(e => !e.hidden && !completedIds.has(e.id));
     container.innerHTML = `
       <div class="lb-empty">
         <h2>No Live Event</h2>
-        <p>${nextEvent ? `Next up: ${nextEvent.name} (${nextEvent.dates})` : 'Check back during tournament play.'}</p>
+        <p>${nextEvent ? `Next up: ${nextEvent.name} (${nextEvent.dates}). The live leaderboard activates when the tournament begins.` : 'Season complete!'}</p>
+      </div>`;
+    return;
+  }
+
+  // Event is active but tournament hasn't started yet (picks window)
+  const now = new Date();
+  const tournStart = new Date(evDef.startDate);
+  if (now < tournStart) {
+    const evType = EVENT_TYPES[evDef.type];
+    const startStr = tournStart.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    container.innerHTML = `
+      <div class="lb-empty">
+        <h2>${evDef.name}</h2>
+        <p style="margin-bottom:0.5rem;">${evDef.dates} &middot; ${evDef.course} &middot; <span class="mult-badge mult-${evType.mult}x">${evType.label} ${evType.mult}x</span></p>
+        <p>The live leaderboard will activate when Round 1 begins on ${startStr}.</p>
+        <p style="margin-top:0.5rem;"><strong>Make sure to submit your picks before then!</strong></p>
       </div>`;
     return;
   }
@@ -2197,7 +2326,7 @@ async function renderLeaderboard() {
     const data = await resp.json();
 
     if (!data.entries || data.entries.length === 0) {
-      container.innerHTML = '<div class="lb-empty"><h2>No picks submitted yet</h2></div>';
+      container.innerHTML = '<div class="lb-empty"><h2>No picks were submitted for this event</h2><p>The leaderboard requires at least one entry.</p></div>';
       return;
     }
 
