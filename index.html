@@ -1442,6 +1442,57 @@ const EVENT_FIELDS = {
   // Future event fields will be added here before each tournament
 };
 
+// ============================================================
+// DYNAMIC FIELD FETCH FROM ESPN
+// ============================================================
+const ESPN_GOLF_API = 'https://site.api.espn.com/apis/site/v2/sports/golf/leaderboard';
+
+async function fetchESPNField() {
+  try {
+    const resp = await fetch(ESPN_GOLF_API);
+    const data = await resp.json();
+    const events = data.events || [];
+    if (events.length === 0) return null;
+
+    const ev = events[0];
+    const comp = ev.competitions?.[0];
+    if (!comp || !comp.competitors) return null;
+
+    const golfers = comp.competitors.map((c, i) => {
+      const athlete = c.athlete || {};
+      const name = athlete.displayName || athlete.fullName || 'Unknown';
+      // Use world ranking if available, otherwise field position
+      const rank = athlete.rank || (i + 1);
+      return { name, rank: parseInt(rank) || (i + 1) };
+    });
+
+    // Sort by rank
+    golfers.sort((a, b) => a.rank - b.rank);
+
+    return {
+      eventName: ev.name || ev.shortName || 'PGA Tour Event',
+      golfers
+    };
+  } catch (err) {
+    console.log('ESPN field fetch failed:', err.message);
+    return null;
+  }
+}
+
+// On picks render, try ESPN first, fall back to hardcoded EVENT_FIELDS
+async function getFieldForEvent(eventId) {
+  // Check hardcoded first (instant, reliable)
+  if (EVENT_FIELDS[eventId]) return EVENT_FIELDS[eventId];
+
+  // Try ESPN API
+  const espnField = await fetchESPNField();
+  if (espnField && espnField.golfers.length > 0) {
+    return { format: 'quick', golfers: espnField.golfers };
+  }
+
+  return null;
+}
+
 // Quick Pick selection state
 let quickPickSelections = [];
 const QUICK_PICK_MAX = 3;
@@ -1865,7 +1916,7 @@ function isPicksOpen() {
   return now >= new Date(evDef.picksOpen) && now < new Date(evDef.deadline);
 }
 
-function renderPicks() {
+async function renderPicks() {
   const container = document.getElementById('picksContent');
   const evDef = getActiveEventDef();
 
@@ -1888,7 +1939,9 @@ function renderPicks() {
   const open = isPicksOpen();
   const deadlineDate = new Date(evDef.deadline);
   const deadlineStr = deadlineDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ' at ' + deadlineDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  const field = EVENT_FIELDS[evDef.id];
+  // Show loading while we fetch field data
+  container.innerHTML = '<div class="picks-empty"><h2>Loading tournament field...</h2></div>';
+  const field = await getFieldForEvent(evDef.id);
 
   // Reset selections
   quickPickSelections = [];
@@ -2227,7 +2280,7 @@ function switchTab(viewId) {
   // Update hash
   window.location.hash = viewId === 'hub' ? '' : viewId;
 
-  // Lazy render
+  // Lazy render (async for picks/leaderboard which fetch data)
   if (viewId === 'picks') renderPicks();
   if (viewId === 'leaderboard') renderLeaderboard();
   if (viewId === 'schedule') renderSchedule();
