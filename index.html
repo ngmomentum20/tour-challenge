@@ -952,13 +952,13 @@ const SEASON_EVENTS = [
   { id: 6,  name: 'RBC Heritage',                  dates: 'Apr 17 - 20',     course: 'Harbour Town',       type: 'SIGNATURE', hidden: true },
   { id: 7,  name: 'Wells Fargo Championship',      dates: 'May 1 - 4',       course: 'Quail Hollow',       type: 'SIGNATURE', hidden: true },
   { id: 8,  name: 'PGA Championship',              dates: 'May 15 - 18',     course: 'Quail Hollow',       type: 'MAJOR' },
-  { id: 9,  name: 'Memorial Tournament',           dates: 'Jun 5 - 8',       course: 'Muirfield Village',  type: 'SIGNATURE' },
-  { id: 10, name: 'U.S. Open',                     dates: 'Jun 19 - 22',     course: 'Shinnecock Hills',   type: 'MAJOR' },
-  { id: 11, name: 'Travelers Championship',        dates: 'Jun 26 - 29',     course: 'TPC River Highlands',type: 'SIGNATURE' },
-  { id: 12, name: 'The Open Championship',         dates: 'Jul 16 - 19',     course: 'Royal Portrush',     type: 'MAJOR' },
-  { id: 13, name: 'FedEx St. Jude Championship',   dates: 'Aug 14 - 17',     course: 'TPC Southwind',      type: 'PLAYOFF' },
-  { id: 14, name: 'BMW Championship',              dates: 'Aug 21 - 24',     course: 'Caves Valley',       type: 'PLAYOFF' },
-  { id: 15, name: 'Tour Championship',             dates: 'Sep 4 - 7',       course: 'East Lake',          type: 'PLAYOFF' }
+  { id: 9,  name: 'Memorial Tournament',           dates: 'Jun 4 - 7',       course: 'Muirfield Village',  type: 'SIGNATURE' },
+  { id: 10, name: 'U.S. Open',                     dates: 'Jun 18 - 21',     course: 'Shinnecock Hills',   type: 'MAJOR' },
+  { id: 11, name: 'Travelers Championship',        dates: 'Jun 25 - 28',     course: 'TPC River Highlands',type: 'SIGNATURE' },
+  { id: 12, name: 'The Open Championship',         dates: 'Jul 16 - 19',     course: 'Royal Birkdale',     type: 'MAJOR' },
+  { id: 13, name: 'FedEx St. Jude Championship',   dates: 'Aug 13 - 16',     course: 'TPC Southwind',      type: 'PLAYOFF' },
+  { id: 14, name: 'BMW Championship',              dates: 'Aug 20 - 23',     course: 'Bellerive CC',       type: 'PLAYOFF' },
+  { id: 15, name: 'Tour Championship',             dates: 'Aug 27 - 30',     course: 'East Lake',          type: 'PLAYOFF' }
 ];
 
 // ============================================================
@@ -1276,7 +1276,21 @@ function renderNextEvent() {
   document.getElementById('nextEventName').innerHTML = `${nextEvent.name} <span class="mult-badge mult-${evType.mult}x">${evType.label} ${evType.mult}x</span>`;
   document.getElementById('nextEventDates').textContent = nextEvent.dates;
   document.getElementById('nextEventCourse').textContent = nextEvent.course;
-  document.getElementById('nextEventCountdown').textContent = 'Picks opening soon';
+
+  // Show deadline or picks status
+  if (ACTIVE_EVENT && ACTIVE_EVENT.eventId === nextEvent.id) {
+    const deadline = new Date(ACTIVE_EVENT.deadline);
+    const now = new Date();
+    if (now < deadline) {
+      const deadlineStr = deadline.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) +
+        ' at ' + deadline.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      document.getElementById('nextEventCountdown').textContent = `Picks due: ${deadlineStr}`;
+    } else {
+      document.getElementById('nextEventCountdown').textContent = 'Picks are closed — tournament in progress';
+    }
+  } else {
+    document.getElementById('nextEventCountdown').textContent = 'Picks not yet open';
+  }
 }
 
 function renderSchedule() {
