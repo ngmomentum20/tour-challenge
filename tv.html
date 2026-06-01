@@ -873,7 +873,7 @@ html, body {
 // CONFIG
 // ============================================================
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxDywTUYnrxdcivJTs2Ool2PaQvN9VQOarodlgG24nTJKZeOIw_g8u-vsPsAASzwZWl/exec';
-const DEADLINE = new Date('2026-05-15T04:00:00Z');
+// DEADLINE is auto-detected from SEASON_EVENTS_TV dates
 const SATURDAY_LEADER = null; // e.g. 'Scottie Scheffler' — set after R3 ends
 const REFRESH_INTERVAL = 5 * 60 * 1000;
 const ESPN_GOLF_URL = 'https://site.api.espn.com/apis/site/v2/sports/golf/leaderboard';
@@ -903,16 +903,16 @@ const GRAND_SLAM = {
 
 function getPointsForPosition(pos) {
   if (pos <= 0) return 55;
-  if (pos === 1) return 1;
-  if (pos === 2) return 2;
-  if (pos === 3) return 3;
-  if (pos <= 5) return 4;
-  if (pos <= 10) return 8;
-  if (pos <= 20) return 15;
-  if (pos <= 30) return 22;
-  if (pos <= 40) return 30;
-  if (pos <= 50) return 38;
-  return 45;
+  if (pos <= 8) return pos;
+  if (pos <= 10) return 10;
+  if (pos <= 15) return 15;
+  if (pos <= 20) return 20;
+  if (pos <= 25) return 25;
+  if (pos <= 30) return 30;
+  if (pos <= 40) return 35;
+  if (pos <= 50) return 40;
+  if (pos <= 60) return 45;
+  return 48;
 }
 const MC_POINTS = 50;
 const WD_POINTS = 55;
@@ -1206,17 +1206,27 @@ function getTier(entry, name) {
   return 0;
 }
 
-function calculateStandings(entries) {
+function calculateStandings(entries, format) {
+  const isQuick = format === 'quick';
+  const countingSlots = isQuick ? 2 : 4;
+
   const standings = entries.map(entry => {
-    const allPicks = [
-      ...(entry.picks?.tier1 || []), ...(entry.picks?.tier2 || []),
-      ...(entry.picks?.tier3 || []), ...(entry.picks?.tier4 || []),
-      ...(entry.picks?.tier5 || [])
-    ];
+    let allPicks;
+    if (isQuick) {
+      // Quick Pick: 3 golfers from qp1/qp2/qp3
+      allPicks = [entry.picks?.qp1, entry.picks?.qp2, entry.picks?.qp3].filter(Boolean);
+    } else {
+      // Full Draft: 8 golfers from tiers
+      allPicks = [
+        ...(entry.picks?.tier1 || []), ...(entry.picks?.tier2 || []),
+        ...(entry.picks?.tier3 || []), ...(entry.picks?.tier4 || []),
+        ...(entry.picks?.tier5 || [])
+      ];
+    }
 
     const golfers = allPicks.map(name => {
       const score = findGolferScore(name);
-      const tier = getTier(entry, name);
+      const tier = isQuick ? 'QP' : getTier(entry, name);
       let points;
       if (!score) { points = WD_POINTS; return { name, tier, points, posDisplay: 'N/A', status: 'unknown' }; }
       if (score.status === 'MC') points = MC_POINTS;
@@ -1226,10 +1236,10 @@ function calculateStandings(entries) {
     });
 
     const sorted = [...golfers].sort((a, b) => a.points - b.points);
-    const countingSet = new Set(sorted.slice(0, 4).map(g => golfers.indexOf(g)));
+    const countingSet = new Set(sorted.slice(0, countingSlots).map(g => golfers.indexOf(g)));
     golfers.forEach((g, i) => { g.counting = countingSet.has(i); });
 
-    const totalPoints = sorted.slice(0, 4).reduce((sum, g) => sum + g.points, 0);
+    const totalPoints = sorted.slice(0, countingSlots).reduce((sum, g) => sum + g.points, 0);
     return { name: entry.name, totalPoints, golfers, tiebreakers: entry.tiebreakers || {} };
   });
 
@@ -1677,26 +1687,54 @@ function launchConfetti() {
 // ============================================================
 // Season events for "next up" display
 const SEASON_EVENTS_TV = [
-  { id: 5,  name: 'The Masters',              dates: 'Apr 10-13',  type: 'Major 3x' },
-  { id: 8,  name: 'PGA Championship',         dates: 'May 15-18',  type: 'Major 3x' },
-  { id: 9,  name: 'Memorial Tournament',      dates: 'Jun 4-7',    type: 'Signature 1x' },
-  { id: 10, name: 'U.S. Open',                dates: 'Jun 18-21',  type: 'Major 3x' },
-  { id: 11, name: 'Travelers Championship',   dates: 'Jun 25-28',  type: 'Signature 1x' },
-  { id: 12, name: 'The Open Championship',    dates: 'Jul 16-19',  type: 'Major 3x' },
-  { id: 13, name: 'FedEx St. Jude',           dates: 'Aug 13-16',  type: 'Playoff 2x' },
-  { id: 14, name: 'BMW Championship',         dates: 'Aug 20-23',  type: 'Playoff 2x' },
-  { id: 15, name: 'Tour Championship',        dates: 'Aug 27-30',  type: 'Playoff 2x' }
+  { id: 5,  name: 'The Masters',              dates: 'Apr 10-13',  type: 'Major 3x', format: 'full',
+    picksOpen: '2026-04-06T12:00:00Z', deadline: '2026-04-10T03:59:00Z', startDate: '2026-04-10T04:00:00Z', endDate: '2026-04-14T03:59:00Z' },
+  { id: 8,  name: 'PGA Championship',         dates: 'May 15-18',  type: 'Major 3x', format: 'full',
+    picksOpen: '2026-05-11T12:00:00Z', deadline: '2026-05-15T03:59:00Z', startDate: '2026-05-15T04:00:00Z', endDate: '2026-05-19T03:59:00Z' },
+  { id: 9,  name: 'Memorial Tournament',      dates: 'Jun 4-7',    type: 'Signature 1x', format: 'quick',
+    picksOpen: '2026-06-01T12:00:00Z', deadline: '2026-06-04T03:59:00Z', startDate: '2026-06-04T04:00:00Z', endDate: '2026-06-08T03:59:00Z' },
+  { id: 10, name: 'U.S. Open',                dates: 'Jun 18-21',  type: 'Major 3x', format: 'full',
+    picksOpen: '2026-06-15T12:00:00Z', deadline: '2026-06-18T03:59:00Z', startDate: '2026-06-18T04:00:00Z', endDate: '2026-06-22T03:59:00Z' },
+  { id: 11, name: 'Travelers Championship',   dates: 'Jun 25-28',  type: 'Signature 1x', format: 'quick',
+    picksOpen: '2026-06-22T12:00:00Z', deadline: '2026-06-25T03:59:00Z', startDate: '2026-06-25T04:00:00Z', endDate: '2026-06-29T03:59:00Z' },
+  { id: 12, name: 'The Open Championship',    dates: 'Jul 16-19',  type: 'Major 3x', format: 'full',
+    picksOpen: '2026-07-13T12:00:00Z', deadline: '2026-07-16T03:59:00Z', startDate: '2026-07-16T04:00:00Z', endDate: '2026-07-20T03:59:00Z' },
+  { id: 13, name: 'FedEx St. Jude',           dates: 'Aug 13-16',  type: 'Playoff 2x', format: 'full',
+    picksOpen: '2026-08-10T12:00:00Z', deadline: '2026-08-13T03:59:00Z', startDate: '2026-08-13T04:00:00Z', endDate: '2026-08-17T03:59:00Z' },
+  { id: 14, name: 'BMW Championship',         dates: 'Aug 20-23',  type: 'Playoff 2x', format: 'full',
+    picksOpen: '2026-08-17T12:00:00Z', deadline: '2026-08-20T03:59:00Z', startDate: '2026-08-20T04:00:00Z', endDate: '2026-08-24T03:59:00Z' },
+  { id: 15, name: 'Tour Championship',        dates: 'Aug 27-30',  type: 'Playoff 2x', format: 'full',
+    picksOpen: '2026-08-24T12:00:00Z', deadline: '2026-08-27T03:59:00Z', startDate: '2026-08-27T04:00:00Z', endDate: '2026-08-31T03:59:00Z' }
 ];
 
+// Auto-detect active event from dates (same as index.html)
+function detectActiveEventTV(completedIds) {
+  const now = new Date();
+  const doneIds = completedIds || new Set([5, 8]);
+  for (const ev of SEASON_EVENTS_TV) {
+    if (doneIds.has(ev.id) || !ev.startDate) continue;
+    const start = new Date(ev.picksOpen);
+    const end = new Date(ev.endDate);
+    if (now >= start && now <= end) return ev;
+  }
+  return null;
+}
+
 async function refresh() {
-  // Fetch app config to check for active event
+  // Fetch results/members from Sheet
   let appData = null;
   try {
     const configResp = await fetch(`${APPS_SCRIPT_URL}?action=getAppData`);
     appData = await configResp.json();
   } catch (err) { console.log('Config fetch failed'); }
 
-  const hasActiveEvent = appData && appData.activeEvent && appData.activeEvent.eventId > 0;
+  // Auto-detect active event from dates
+  const completedIds = new Set((appData?.completedEvents || []).map(e => e.eventId));
+  if (completedIds.size === 0) { completedIds.add(5); completedIds.add(8); } // Fallback
+  const activeEventDef = detectActiveEventTV(completedIds);
+  const hasActiveEvent = activeEventDef !== null;
+  const now = new Date();
+  const tournamentStarted = hasActiveEvent && now >= new Date(activeEventDef.startDate);
 
   // Always fetch ESPN and news
   await Promise.all([
@@ -1713,10 +1751,7 @@ async function refresh() {
 
   // Update header event info
   if (hasActiveEvent) {
-    const evDef = SEASON_EVENTS_TV.find(e => e.id === appData.activeEvent.eventId);
-    if (evDef) {
-      document.getElementById('headerEventInfo').textContent = `${evDef.name} • ${evDef.dates}`;
-    }
+    document.getElementById('headerEventInfo').textContent = `${activeEventDef.name} • ${activeEventDef.dates}`;
   } else {
     document.getElementById('headerEventInfo').textContent = '2026 Season';
   }
@@ -1726,12 +1761,12 @@ async function refresh() {
     renderTournament();
   }
 
-  if (hasActiveEvent) {
-    // Active pool event — fetch picks and show standings
-    const poolData = await fetchPoolEntries();
+  if (hasActiveEvent && tournamentStarted) {
+    // Tournament in progress — fetch picks and show live standings
+    const poolData = await fetchPoolEntries(activeEventDef.id);
 
-    if (poolData && poolData.entries && poolData.entries.length > 0 && poolData.entries[0].picks) {
-      const standings = calculateStandings(poolData.entries);
+    if (poolData && poolData.entries && poolData.entries.length > 0) {
+      const standings = calculateStandings(poolData.entries, activeEventDef.format);
       renderPool(standings);
       renderGrandSlam(standings);
       renderTicker(standings);
@@ -1744,7 +1779,7 @@ async function refresh() {
       renderNoPoolEvent(appData);
     }
   } else {
-    // No active pool event — show season standings + next event
+    // No active event or picks still open (tournament hasn't started)
     renderNoPoolEvent(appData);
   }
 }
