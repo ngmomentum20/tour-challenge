@@ -494,6 +494,8 @@ body {
 }
 .schedule-status.completed { background: rgba(26,107,60,0.12); color: var(--green); }
 .schedule-status.active { background: rgba(74,222,128,0.2); color: #15803d; }
+.schedule-status.in-progress { background: rgba(74,222,128,0.2); color: #15803d; font-weight: 600; }
+.schedule-status.picks-open { background: rgba(212,168,67,0.25); color: #92710a; font-weight: 600; }
 .schedule-status.upcoming { background: rgba(0,32,91,0.08); color: var(--text-light); }
 .schedule-status.next { background: rgba(212,168,67,0.2); color: #92710a; }
 .schedule-winner {
@@ -1527,7 +1529,7 @@ function updatePickCards() {
 
   // Enable/disable submit
   const btn = document.getElementById('submitPicks');
-  if (btn && !btn.dataset.closed) {
+  if (btn) {
     btn.disabled = quickPickSelections.length < QUICK_PICK_MAX;
   }
 }
@@ -1808,12 +1810,24 @@ function renderNextEvent() {
 function renderSchedule() {
   const body = document.getElementById('scheduleBody');
   const completedIds = new Set(COMPLETED_EVENTS.map(e => e.eventId));
-  const nextEvent = SEASON_EVENTS.find(e => !e.hidden && !completedIds.has(e.id));
+  const now = new Date();
+  let foundNextUp = false;
 
   body.innerHTML = SEASON_EVENTS.filter(ev => !ev.hidden).map(ev => {
     const evType = EVENT_TYPES[ev.type];
     const isCompleted = completedIds.has(ev.id);
-    const isNext = nextEvent && ev.id === nextEvent.id;
+
+    // Check if tournament is currently in progress (between startDate and endDate)
+    const isInProgress = !isCompleted && ev.startDate && ev.endDate &&
+      now >= new Date(ev.startDate) && now <= new Date(ev.endDate);
+
+    // Check if picks are open (between picksOpen and deadline, before tournament starts)
+    const isPicksOpen = !isCompleted && !isInProgress && ev.picksOpen && ev.startDate &&
+      now >= new Date(ev.picksOpen) && now < new Date(ev.startDate);
+
+    // "Next Up" is the first non-completed, non-in-progress future event
+    const isNext = !isCompleted && !isInProgress && !isPicksOpen && !foundNextUp &&
+      ev.startDate && now < new Date(ev.startDate);
 
     let statusClass = 'upcoming';
     let statusText = 'Upcoming';
@@ -1825,7 +1839,14 @@ function renderSchedule() {
       const evData = COMPLETED_EVENTS.find(e => e.eventId === ev.id);
       const winner = evData?.results.find(r => r.poolFinish === 1);
       if (winner) winnerText = `<span class="schedule-winner"><svg class="inline-icon" viewBox="0 0 24 24"><path d="M6 9H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3M18 9h3a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1h-3M6 4h12v6a6 6 0 0 1-12 0V4zM9 20h6M12 16v4"/></svg> ${winner.name}</span>`;
+    } else if (isInProgress) {
+      statusClass = 'in-progress';
+      statusText = 'In Progress';
+    } else if (isPicksOpen) {
+      statusClass = 'picks-open';
+      statusText = 'Picks Open';
     } else if (isNext) {
+      foundNextUp = true;
       statusClass = 'next';
       statusText = 'Next Up';
     }
@@ -1940,6 +1961,39 @@ async function renderPicks() {
   const open = isPicksOpen();
   const deadlineDate = new Date(evDef.deadline);
   const deadlineStr = deadlineDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ' at ' + deadlineDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
+  // If picks are closed, show a compact view instead of the full form
+  if (!open) {
+    container.innerHTML = `
+      <div class="picks-form">
+        <div class="picks-header">
+          <h2>${evDef.name}</h2>
+          <p>${evDef.dates} &middot; ${evDef.course} &middot; <span class="mult-badge mult-${evType.mult}x">${evType.label} ${evType.mult}x</span></p>
+        </div>
+        <div class="deadline-banner">Picks are closed — the tournament is underway.</div>
+        <div style="text-align:center; padding:1.5rem 1rem;">
+          <p style="font-size:0.8rem; color:var(--text-light); margin-bottom:1rem;">Head to the <a href="#leaderboard" onclick="switchTab('leaderboard'); return false;" style="color:var(--gold); font-weight:600;">Live Leaderboard</a> to see how everyone's picks are doing.</p>
+          <div style="border-top:1px solid var(--cream-dark); padding-top:1rem; margin-top:0.5rem;">
+            <p style="font-size:0.7rem; color:var(--text-light); margin-bottom:0.5rem;">Want to view your submitted picks?</p>
+            <div class="auth-section" style="max-width:300px; margin:0 auto;">
+              <div class="pick-section">
+                <div class="pick-label">Your Name</div>
+                <input type="text" class="pick-input" id="pickName" placeholder="e.g. Nick">
+              </div>
+              <div class="pick-section">
+                <div class="pick-label">Passcode</div>
+                <input type="password" class="pick-input" id="pickPasscode" placeholder="Your passcode">
+              </div>
+            </div>
+            <button class="load-picks-btn" onclick="loadMyPicks()" style="background:none; border:1.5px solid var(--cream-dark); border-radius:8px; padding:0.4rem 1rem; font-family:'DM Sans',sans-serif; font-size:0.7rem; color:var(--pga-dark); cursor:pointer; font-weight:600; margin-top:0.5rem;">View My Picks</button>
+            <div id="loadPicksMsg" style="font-size:0.65rem; color:var(--text-light); margin-top:0.3rem;"></div>
+            <div id="viewPicksResult" style="margin-top:0.75rem;"></div>
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
+
   // Show loading while we fetch field data
   container.innerHTML = '<div class="picks-empty"><h2>Loading tournament field...</h2></div>';
   const field = await getFieldForEvent(evDef.id);
@@ -1953,15 +2007,15 @@ async function renderPicks() {
         <h2>${evDef.name}</h2>
         <p>${evDef.dates} &middot; ${evDef.course} &middot; <span class="mult-badge mult-${evType.mult}x">${evType.label} ${evType.mult}x</span></p>
       </div>
-      <div class="deadline-banner">${open ? `Picks due: ${deadlineStr}` : 'Picks are closed for this event.'}</div>
+      <div class="deadline-banner">Picks due: ${deadlineStr}</div>
       <div class="auth-section">
         <div class="pick-section">
           <div class="pick-label">Your Name</div>
-          <input type="text" class="pick-input" id="pickName" placeholder="e.g. Nick" ${!open ? 'disabled' : ''}>
+          <input type="text" class="pick-input" id="pickName" placeholder="e.g. Nick">
         </div>
         <div class="pick-section">
           <div class="pick-label">Passcode</div>
-          <input type="password" class="pick-input" id="pickPasscode" placeholder="Your passcode" ${!open ? 'disabled' : ''}>
+          <input type="password" class="pick-input" id="pickPasscode" placeholder="Your passcode">
         </div>
       </div>
       <div style="text-align:center; margin-bottom:0.75rem;">
@@ -1995,9 +2049,9 @@ async function renderPicks() {
       <div class="card" style="margin-bottom:0.8rem;">
         <div class="card-header" style="font-size:0.75rem;">Quick Pick &mdash; Choose 3 Golfers</div>
         <div class="card-body">
-          <div class="pick-section"><div class="pick-label">Pick 1</div><input type="text" class="pick-input" id="qp1" placeholder="Golfer name" ${!open ? 'disabled' : ''}></div>
-          <div class="pick-section"><div class="pick-label">Pick 2</div><input type="text" class="pick-input" id="qp2" placeholder="Golfer name" ${!open ? 'disabled' : ''}></div>
-          <div class="pick-section"><div class="pick-label">Pick 3</div><input type="text" class="pick-input" id="qp3" placeholder="Golfer name" ${!open ? 'disabled' : ''}></div>
+          <div class="pick-section"><div class="pick-label">Pick 1</div><input type="text" class="pick-input" id="qp1" placeholder="Golfer name" ></div>
+          <div class="pick-section"><div class="pick-label">Pick 2</div><input type="text" class="pick-input" id="qp2" placeholder="Golfer name" ></div>
+          <div class="pick-section"><div class="pick-label">Pick 3</div><input type="text" class="pick-input" id="qp3" placeholder="Golfer name" ></div>
         </div>
       </div>`;
   } else if (field && field.tiers) {
@@ -2029,9 +2083,9 @@ async function renderPicks() {
       <div class="tb-section">
         <h3>Tiebreakers</h3>
         <div class="tb-grid">
-          <div class="pick-section"><div class="pick-label">Winning Score</div><input type="text" class="pick-input" id="tbScore" placeholder="e.g. -12" ${!open ? 'disabled' : ''}></div>
-          <div class="pick-section"><div class="pick-label">Playoff?</div><select class="pick-select" id="tbPlayoff" ${!open ? 'disabled' : ''}><option value="">Select</option><option value="Yes">Yes</option><option value="No">No</option></select></div>
-          <div class="pick-section"><div class="pick-label">Sat. Leader</div><input type="text" class="pick-input" id="tbLeader" placeholder="e.g. Scheffler" ${!open ? 'disabled' : ''}></div>
+          <div class="pick-section"><div class="pick-label">Winning Score</div><input type="text" class="pick-input" id="tbScore" placeholder="e.g. -12" ></div>
+          <div class="pick-section"><div class="pick-label">Playoff?</div><select class="pick-select" id="tbPlayoff" ><option value="">Select</option><option value="Yes">Yes</option><option value="No">No</option></select></div>
+          <div class="pick-section"><div class="pick-label">Sat. Leader</div><input type="text" class="pick-input" id="tbLeader" placeholder="e.g. Scheffler" ></div>
         </div>
       </div>`;
   } else {
@@ -2040,17 +2094,17 @@ async function renderPicks() {
       <div class="card" style="margin-bottom:0.8rem;">
         <div class="card-header" style="font-size:0.75rem;">Full Draft &mdash; 8 Golfers, 5 Tiers</div>
         <div class="card-body">
-          <div class="pick-section"><div class="pick-label">Tier 1 <span class="tier-badge">Pick 1</span></div><input type="text" class="pick-input" id="tier1" ${!open ? 'disabled' : ''}></div>
-          <div class="pick-section"><div class="pick-label">Tier 2 <span class="tier-badge">Pick 2</span></div><div class="pick-row"><input type="text" class="pick-input" id="tier2a" ${!open ? 'disabled' : ''}><input type="text" class="pick-input" id="tier2b" ${!open ? 'disabled' : ''}></div></div>
-          <div class="pick-section"><div class="pick-label">Tier 3 <span class="tier-badge">Pick 2</span></div><div class="pick-row"><input type="text" class="pick-input" id="tier3a" ${!open ? 'disabled' : ''}><input type="text" class="pick-input" id="tier3b" ${!open ? 'disabled' : ''}></div></div>
-          <div class="pick-section"><div class="pick-label">Tier 4 <span class="tier-badge">Pick 2</span></div><div class="pick-row"><input type="text" class="pick-input" id="tier4a" ${!open ? 'disabled' : ''}><input type="text" class="pick-input" id="tier4b" ${!open ? 'disabled' : ''}></div></div>
-          <div class="pick-section"><div class="pick-label">Tier 5 <span class="tier-badge">Pick 1</span></div><input type="text" class="pick-input" id="tier5" ${!open ? 'disabled' : ''}></div>
+          <div class="pick-section"><div class="pick-label">Tier 1 <span class="tier-badge">Pick 1</span></div><input type="text" class="pick-input" id="tier1" ></div>
+          <div class="pick-section"><div class="pick-label">Tier 2 <span class="tier-badge">Pick 2</span></div><div class="pick-row"><input type="text" class="pick-input" id="tier2a" ><input type="text" class="pick-input" id="tier2b" ></div></div>
+          <div class="pick-section"><div class="pick-label">Tier 3 <span class="tier-badge">Pick 2</span></div><div class="pick-row"><input type="text" class="pick-input" id="tier3a" ><input type="text" class="pick-input" id="tier3b" ></div></div>
+          <div class="pick-section"><div class="pick-label">Tier 4 <span class="tier-badge">Pick 2</span></div><div class="pick-row"><input type="text" class="pick-input" id="tier4a" ><input type="text" class="pick-input" id="tier4b" ></div></div>
+          <div class="pick-section"><div class="pick-label">Tier 5 <span class="tier-badge">Pick 1</span></div><input type="text" class="pick-input" id="tier5" ></div>
         </div>
       </div>
       <div class="tb-section"><h3>Tiebreakers</h3><div class="tb-grid">
-        <div class="pick-section"><div class="pick-label">Winning Score</div><input type="text" class="pick-input" id="tbScore" ${!open ? 'disabled' : ''}></div>
-        <div class="pick-section"><div class="pick-label">Playoff?</div><select class="pick-select" id="tbPlayoff" ${!open ? 'disabled' : ''}><option value="">Select</option><option value="Yes">Yes</option><option value="No">No</option></select></div>
-        <div class="pick-section"><div class="pick-label">Sat. Leader</div><input type="text" class="pick-input" id="tbLeader" ${!open ? 'disabled' : ''}></div>
+        <div class="pick-section"><div class="pick-label">Winning Score</div><input type="text" class="pick-input" id="tbScore" ></div>
+        <div class="pick-section"><div class="pick-label">Playoff?</div><select class="pick-select" id="tbPlayoff" ><option value="">Select</option><option value="Yes">Yes</option><option value="No">No</option></select></div>
+        <div class="pick-section"><div class="pick-label">Sat. Leader</div><input type="text" class="pick-input" id="tbLeader" ></div>
       </div></div>`;
   }
 
@@ -2059,9 +2113,9 @@ async function renderPicks() {
     <div class="tb-section" style="margin-top:0.6rem;">
       <h3>Bonus Predictions</h3>
       <div class="tb-grid">
-        <div class="pick-section"><div class="pick-label">Pick Winner</div><input type="text" class="pick-input" id="bonusWinner" placeholder="e.g. Scheffler" ${!open ? 'disabled' : ''}></div>
-        <div class="pick-section"><div class="pick-label">Winning Score</div><input type="text" class="pick-input" id="bonusScore" placeholder="e.g. -15" ${!open ? 'disabled' : ''}></div>
-        <div class="pick-section"><div class="pick-label">54-hole leader wins?</div><select class="pick-select" id="bonusLeaderHolds" ${!open ? 'disabled' : ''}><option value="">Select</option><option value="Yes">Yes</option><option value="No">No</option></select></div>
+        <div class="pick-section"><div class="pick-label">Pick Winner</div><input type="text" class="pick-input" id="bonusWinner" placeholder="e.g. Scheffler" ></div>
+        <div class="pick-section"><div class="pick-label">Winning Score</div><input type="text" class="pick-input" id="bonusScore" placeholder="e.g. -15" ></div>
+        <div class="pick-section"><div class="pick-label">54-hole leader wins?</div><select class="pick-select" id="bonusLeaderHolds" ><option value="">Select</option><option value="Yes">Yes</option><option value="No">No</option></select></div>
       </div>
     </div>`;
 
@@ -2072,7 +2126,7 @@ async function renderPicks() {
       <p style="font-size:0.65rem; color:var(--text-light); margin-bottom:0.4rem;">Choose one PGA Tour player as your guy for the entire season. You earn bonus points when they perform well: Win +5, Top 5 +3, Top 10 +1. Once set, this is locked for the season. Leave blank if already set.</p>
       <div class="pick-section">
         <div class="pick-label">My Guy</div>
-        <input type="text" class="pick-input" id="myGuyPick" placeholder="e.g. Scottie Scheffler" ${!open ? 'disabled' : ''}>
+        <input type="text" class="pick-input" id="myGuyPick" placeholder="e.g. Scottie Scheffler" >
       </div>
     </div>
     <div class="tb-section" style="margin-top:0.6rem; display:none;" id="myGuyLocked">
@@ -2081,8 +2135,8 @@ async function renderPicks() {
     </div>`;
 
   formHTML += `
-      <button class="submit-btn" id="submitPicks" ${!open ? 'disabled data-closed="1"' : 'disabled'} onclick="submitPicks()">
-        ${open ? 'Submit Picks' : 'Picks Closed'}
+      <button class="submit-btn" id="submitPicks" disabled onclick="submitPicks()">
+        Submit Picks
       </button>
       <div id="picksMessage"></div>
     </div>`;
@@ -2137,6 +2191,48 @@ async function loadMyPicks() {
 
     if (data.success && data.entry) {
       const entry = data.entry;
+      const viewResult = document.getElementById('viewPicksResult');
+
+      // If the form is not rendered (picks closed), show a read-only view
+      if (viewResult && !document.getElementById('submitPicks')) {
+        msgEl.textContent = '';
+        let picksHTML = '<div style="text-align:left; background:var(--white); border-radius:10px; padding:0.75rem; box-shadow:var(--shadow);">';
+        picksHTML += `<div style="font-weight:700; font-size:0.75rem; margin-bottom:0.5rem; color:var(--pga-dark);">${name}'s Picks</div>`;
+
+        if (entry.format === 'quick' || entry.qp1) {
+          const picks = [entry.qp1, entry.qp2, entry.qp3].filter(Boolean);
+          picks.forEach((p, i) => {
+            picksHTML += `<div style="padding:0.3rem 0; font-size:0.72rem; border-bottom:1px solid var(--cream); display:flex; justify-content:space-between;"><span>${p}</span><span style="color:var(--text-light);">Pick ${i+1}</span></div>`;
+          });
+        } else {
+          const tiers = [
+            { label: 'Tier 1', picks: [entry.tier1].filter(Boolean) },
+            { label: 'Tier 2', picks: [entry.tier2a, entry.tier2b].filter(Boolean) },
+            { label: 'Tier 3', picks: [entry.tier3a, entry.tier3b].filter(Boolean) },
+            { label: 'Tier 4', picks: [entry.tier4a, entry.tier4b].filter(Boolean) },
+            { label: 'Tier 5', picks: [entry.tier5].filter(Boolean) }
+          ];
+          tiers.forEach(t => {
+            t.picks.forEach(p => {
+              picksHTML += `<div style="padding:0.3rem 0; font-size:0.72rem; border-bottom:1px solid var(--cream); display:flex; justify-content:space-between;"><span>${p}</span><span style="color:var(--text-light);">${t.label}</span></div>`;
+            });
+          });
+        }
+
+        if (entry.bonusWinner || entry.bonusScore) {
+          picksHTML += `<div style="margin-top:0.5rem; font-size:0.65rem; color:var(--text-light);">`;
+          if (entry.bonusWinner) picksHTML += `Winner pick: ${entry.bonusWinner} &bull; `;
+          if (entry.bonusScore) picksHTML += `Score: ${entry.bonusScore} &bull; `;
+          if (entry.bonusLeaderHolds) picksHTML += `54-hole leader holds: ${entry.bonusLeaderHolds}`;
+          picksHTML += `</div>`;
+        }
+
+        picksHTML += '</div>';
+        viewResult.innerHTML = picksHTML;
+        return;
+      }
+
+      // Form is open — populate fields for editing
       msgEl.textContent = 'Picks loaded! Update and resubmit to change.';
       msgEl.style.color = 'var(--green)';
 
@@ -2167,10 +2263,16 @@ async function loadMyPicks() {
       // Check My Guy status from loaded member data
       checkMyGuyStatus(name, passcode);
     } else {
-      msgEl.textContent = 'No picks found yet — make your selections below!';
-      msgEl.style.color = 'var(--text-light)';
-      // First-time user: show My Guy section
-      document.getElementById('myGuySection').style.display = 'block';
+      const viewResult = document.getElementById('viewPicksResult');
+      if (viewResult && !document.getElementById('submitPicks')) {
+        msgEl.textContent = 'No picks were submitted for this event.';
+        msgEl.style.color = 'var(--text-light)';
+      } else {
+        msgEl.textContent = 'No picks found yet — make your selections below!';
+        msgEl.style.color = 'var(--text-light)';
+        // First-time user: show My Guy section
+        if (document.getElementById('myGuySection')) document.getElementById('myGuySection').style.display = 'block';
+      }
     }
   } catch (err) {
     msgEl.textContent = 'Network error. Try again.';
@@ -2259,18 +2361,16 @@ async function submitPicks() {
   } catch (err) {
     msgEl.innerHTML = '<div class="picks-msg error">Network error. Please try again.</div>';
   }
-  if (!btn.dataset.closed) {
-    btn.disabled = false;
-    btn.textContent = 'Submit Picks';
-  }
+  btn.disabled = false;
+  btn.textContent = 'Submit Picks';
 }
 
 // ============================================================
 // LIVE LEADERBOARD
 // ============================================================
-const POSITION_POINTS = {
-  1:1, 2:2, 3:3, 4:4, 5:5, 6:6, 7:7, 8:8
-};
+const MC_POINTS = 50;
+const WD_POINTS = 55;
+
 function getPositionPoints(pos) {
   if (pos <= 0) return 50;
   if (pos <= 8) return pos;
@@ -2285,13 +2385,101 @@ function getPositionPoints(pos) {
   return 48;
 }
 
-function parsePosString(posStr) {
-  if (!posStr) return 999;
-  const s = posStr.toString().toUpperCase().replace('T', '');
-  if (s === 'CUT' || s === 'MC') return 998;
-  if (s === 'WD' || s === 'DQ') return 999;
-  const n = parseInt(s);
-  return isNaN(n) ? 999 : n;
+function normalizeName(name) {
+  return name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z\s]/g, '').trim();
+}
+
+// Fetch live ESPN leaderboard data
+async function fetchESPNLeaderboard() {
+  try {
+    const resp = await fetch(ESPN_GOLF_API);
+    const data = await resp.json();
+    const events = data.events || [];
+    if (events.length === 0) return null;
+
+    const ev = events[0];
+    const comp = ev.competitions?.[0];
+    if (!comp) return null;
+
+    const competitors = [];
+    for (const c of (comp.competitors || [])) {
+      const athlete = c.athlete || {};
+      const status = c.status || {};
+      let posNum = 999, posDisplay = '--', playerStatus = 'active', scoreToPar = '--', today = '--', thru = '--';
+
+      if (status.position) {
+        posDisplay = status.position.displayName || status.displayValue || '--';
+        posNum = parseInt(status.position.id) || 999;
+      }
+
+      const st = status.type?.name || '';
+      if (st === 'STATUS_CUT' || status.period === 99) { playerStatus = 'MC'; posDisplay = 'MC'; }
+      if (st === 'STATUS_WITHDRAWN' || st === 'STATUS_DISQUALIFIED') { playerStatus = 'WD'; posDisplay = 'WD'; }
+
+      // Compute total score to par
+      const ls = c.linescores || [];
+      const curPeriod = status.period || 1;
+      const curRound = ls.find(l => l.period === curPeriod && l.displayValue);
+
+      let computedTotal = 0;
+      let hasAnyScore = false;
+      for (const l of ls) {
+        if (l.displayValue) {
+          hasAnyScore = true;
+          if (l.displayValue !== 'E') computedTotal += parseInt(l.displayValue) || 0;
+        }
+      }
+      if (hasAnyScore) {
+        scoreToPar = computedTotal === 0 ? 'E' : (computedTotal > 0 ? '+' + computedTotal : String(computedTotal));
+      } else if (c.score) {
+        scoreToPar = c.score.displayValue || '--';
+      }
+
+      if (curRound) {
+        if (status.thru === 18) {
+          today = curRound.value ? String(curRound.value) : curRound.displayValue;
+        } else if (status.thru > 0) {
+          today = curRound.displayValue;
+        }
+      }
+      if (status.thru !== undefined && status.thru !== null) thru = status.thru === 18 ? 'F' : String(status.thru);
+
+      competitors.push({ name: athlete.displayName || '', position: posNum, posDisplay, scoreToPar, scoreNum: computedTotal, today, thru, status: playerStatus });
+    }
+
+    competitors.sort((a, b) => {
+      if (a.status === 'MC' || a.status === 'WD') return 1;
+      if (b.status === 'MC' || b.status === 'WD') return -1;
+      if (a.scoreNum !== b.scoreNum) return a.scoreNum - b.scoreNum;
+      return a.position - b.position;
+    });
+
+    const eventStatus = ev.status?.type?.name || '';
+    return {
+      name: ev.name || '',
+      round: ev.status?.period || 1,
+      isComplete: eventStatus === 'STATUS_FINAL' || ev.status?.type?.completed === true,
+      statusDisplay: ev.status?.type?.shortDetail || '',
+      competitors
+    };
+  } catch (err) {
+    console.log('ESPN leaderboard fetch failed:', err.message);
+    return null;
+  }
+}
+
+function findGolferInESPN(golferName, espnData) {
+  if (!espnData || !espnData.competitors) return null;
+  const normalized = normalizeName(golferName);
+  for (const c of espnData.competitors) {
+    if (normalizeName(c.name) === normalized) return c;
+  }
+  // Fallback: match by last name
+  const lastName = normalized.split(' ').pop();
+  for (const c of espnData.competitors) {
+    if (normalizeName(c.name).split(' ').pop() === lastName) return c;
+  }
+  return null;
 }
 
 async function renderLeaderboard() {
@@ -2329,10 +2517,13 @@ async function renderLeaderboard() {
   container.innerHTML = '<div class="lb-empty"><h2>Loading leaderboard...</h2></div>';
 
   try {
-    const resp = await fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${ACTIVE_EVENT.eventId}`);
-    const data = await resp.json();
+    // Fetch picks and ESPN data in parallel
+    const [picksResp, espnData] = await Promise.all([
+      fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${ACTIVE_EVENT.eventId}`).then(r => r.json()),
+      fetchESPNLeaderboard()
+    ]);
 
-    if (!data.entries || data.entries.length === 0) {
+    if (!picksResp.entries || picksResp.entries.length === 0) {
       container.innerHTML = '<div class="lb-empty"><h2>No picks were submitted for this event</h2><p>The leaderboard requires at least one entry.</p></div>';
       return;
     }
@@ -2340,49 +2531,108 @@ async function renderLeaderboard() {
     const evType = EVENT_TYPES[evDef.type];
     const isQuickPick = evDef.type === 'SIGNATURE';
     const countingSlots = isQuickPick ? 2 : 4;
+    const hasESPN = espnData && espnData.competitors && espnData.competitors.length > 0;
 
-    // Build standings from picks
-    // Note: in production, the Apps Script would merge ESPN leaderboard data
-    // For now, show picks submitted with placeholder scoring
+    // Build scored standings for each entry
+    const standings = picksResp.entries.map(entry => {
+      let allPicks;
+      if (isQuickPick) {
+        allPicks = [entry.picks?.qp1, entry.picks?.qp2, entry.picks?.qp3].filter(Boolean);
+      } else {
+        allPicks = [
+          ...(Array.isArray(entry.picks?.tier1) ? entry.picks.tier1 : [entry.picks?.tier1]),
+          ...(entry.picks?.tier2 || []),
+          ...(entry.picks?.tier3 || []),
+          ...(entry.picks?.tier4 || []),
+          ...(Array.isArray(entry.picks?.tier5) ? entry.picks.tier5 : [entry.picks?.tier5])
+        ].filter(Boolean);
+      }
+
+      const golfers = allPicks.map(name => {
+        const espn = hasESPN ? findGolferInESPN(name, espnData) : null;
+        let points, posDisplay, scoreToPar, thru, status;
+
+        if (!espn) {
+          points = hasESPN ? WD_POINTS : 0;
+          posDisplay = hasESPN ? 'N/A' : '—';
+          scoreToPar = ''; thru = ''; status = 'unknown';
+        } else if (espn.status === 'MC') {
+          points = MC_POINTS; posDisplay = 'MC'; scoreToPar = espn.scoreToPar; thru = ''; status = 'MC';
+        } else if (espn.status === 'WD') {
+          points = WD_POINTS; posDisplay = 'WD'; scoreToPar = ''; thru = ''; status = 'WD';
+        } else {
+          points = getPositionPoints(espn.position);
+          posDisplay = espn.posDisplay; scoreToPar = espn.scoreToPar;
+          thru = espn.thru; status = 'active';
+        }
+
+        return { name, points, posDisplay, scoreToPar, thru, status };
+      });
+
+      // Sort by points to determine counting picks
+      const sorted = [...golfers].sort((a, b) => a.points - b.points);
+      const countingSet = new Set(sorted.slice(0, countingSlots).map(g => golfers.indexOf(g)));
+      golfers.forEach((g, i) => { g.counting = countingSet.has(i); });
+
+      const totalPoints = hasESPN ? sorted.slice(0, countingSlots).reduce((sum, g) => sum + g.points, 0) : null;
+      return { name: entry.name, totalPoints, golfers, pickCount: allPicks.length };
+    });
+
+    // Sort by total points (lowest first)
+    if (hasESPN) {
+      standings.sort((a, b) => a.totalPoints - b.totalPoints);
+    }
+
+    // Assign ranks with tie handling
+    standings.forEach((s, i) => {
+      if (!hasESPN) { s.rank = i + 1; return; }
+      if (i === 0 || s.totalPoints !== standings[i - 1].totalPoints) {
+        s.rank = i + 1;
+      } else {
+        s.rank = standings[i - 1].rank;
+      }
+    });
+
+    // Status line
+    let statusLine = '';
+    if (hasESPN) {
+      if (espnData.isComplete) statusLine = 'Final';
+      else if (espnData.statusDisplay) statusLine = espnData.statusDisplay;
+      else statusLine = `Round ${espnData.round}`;
+    }
+
     let html = `
       <div class="lb-active">
         <div class="lb-event-header">
           <h2>${evDef.name}</h2>
           <p>${evDef.dates} &middot; ${evDef.course} &middot; <span class="mult-badge mult-${evType.mult}x">${evType.label} ${evType.mult}x</span></p>
+          ${statusLine ? `<p style="font-size:0.7rem; margin-top:0.25rem; font-weight:600;">${statusLine}</p>` : ''}
         </div>
         <div class="lb-refresh-bar">Last updated: ${new Date().toLocaleTimeString()} &middot; <a href="#" onclick="renderLeaderboard(); return false;" style="color:var(--gold);">Refresh</a></div>`;
 
-    data.entries.forEach((entry, i) => {
-      const golfers = [];
-      if (isQuickPick) {
-        if (entry.picks?.qp1) golfers.push(entry.picks.qp1);
-        if (entry.picks?.qp2) golfers.push(entry.picks.qp2);
-        if (entry.picks?.qp3) golfers.push(entry.picks.qp3);
-      } else {
-        if (entry.picks?.tier1) golfers.push(...(Array.isArray(entry.picks.tier1) ? entry.picks.tier1 : [entry.picks.tier1]));
-        if (entry.picks?.tier2) golfers.push(...entry.picks.tier2);
-        if (entry.picks?.tier3) golfers.push(...entry.picks.tier3);
-        if (entry.picks?.tier4) golfers.push(...entry.picks.tier4);
-        if (entry.picks?.tier5) golfers.push(...(Array.isArray(entry.picks.tier5) ? entry.picks.tier5 : [entry.picks.tier5]));
-      }
-
+    standings.forEach((entry, i) => {
       html += `
         <div class="lb-entry ${i === 0 ? 'leader' : ''}">
           <div class="lb-entry-head" onclick="this.nextElementSibling.classList.toggle('open')">
-            <div class="lb-rank">${i + 1}</div>
+            <div class="lb-rank">${entry.rank}</div>
             <div class="lb-name">${entry.name}</div>
             <div>
-              <div class="lb-score">${golfers.length} picks</div>
-              <div class="lb-score-label">submitted</div>
+              <div class="lb-score">${hasESPN ? entry.totalPoints + ' pts' : entry.pickCount + ' picks'}</div>
+              <div class="lb-score-label">${hasESPN ? (isQuickPick ? 'best 2 of 3' : 'best 4 of 8') : 'submitted'}</div>
             </div>
           </div>
           <div class="lb-detail">
-            ${golfers.map(g => `
-              <div class="lb-golfer-row">
-                <span>${g}</span>
-                <span class="lb-golfer-pos">—</span>
-              </div>
-            `).join('')}
+            ${entry.golfers.map(g => {
+              const rowClass = hasESPN ? (g.counting ? 'counting' : 'not-counting') : '';
+              const posCol = hasESPN
+                ? `<span class="lb-golfer-pos" style="font-weight:600;">${g.posDisplay}</span><span style="font-size:0.6rem; color:var(--text-light); width:2rem; text-align:center;">${g.scoreToPar || ''}</span>${g.thru ? `<span style="font-size:0.55rem; color:var(--text-light); width:1.5rem; text-align:center;">${g.thru}</span>` : ''}`
+                : `<span class="lb-golfer-pos">—</span>`;
+              return `
+              <div class="lb-golfer-row ${rowClass}">
+                <span>${g.name}${g.counting && hasESPN ? '' : ''}</span>
+                <span style="display:flex; align-items:center; gap:0.3rem;">${posCol}</span>
+              </div>`;
+            }).join('')}
           </div>
         </div>`;
     });
