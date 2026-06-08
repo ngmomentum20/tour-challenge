@@ -1140,6 +1140,13 @@ svg.inline-icon.icon-dark { stroke: var(--pga-dark); }
   <!-- ===== LEADERBOARD VIEW ===== -->
   <div class="view" id="view-leaderboard">
     <div id="lbContent"></div>
+    <!-- Hidden admin panel — only visible with ?admin=1 in URL -->
+    <div id="adminPanel" style="display:none; margin-top:1rem; padding:0.75rem; background:var(--card-bg); border-radius:8px; border:1px solid var(--border);">
+      <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+        <button id="adminFinalizeBtn" onclick="adminFinalizeEvent()" style="padding:0.4rem 0.8rem; background:var(--gold); color:#000; border:none; border-radius:6px; font-weight:600; font-size:0.65rem; cursor:pointer;">Finalize Results</button>
+        <span id="adminFinalizeStatus" style="font-size:0.6rem; color:var(--text-light);"></span>
+      </div>
+    </div>
   </div>
 
   <!-- ===== HISTORY VIEW ===== -->
@@ -2741,6 +2748,216 @@ function handleHash() {
 }
 
 // ============================================================
+// AUTO-FINALIZE: Score an event and save results automatically
+// ============================================================
+
+// Extract scoring logic into a reusable function.
+// Returns sorted array: [{ name, rawScore, poolFinish }]
+function scoreEvent(picksEntries, espnData, eventType) {
+  const isQuickPick = eventType === 'SIGNATURE';
+  const countingSlots = isQuickPick ? 2 : 4;
+  const hasESPN = espnData && espnData.competitors && espnData.competitors.length > 0;
+
+  if (!hasESPN) return null; // Can't score without ESPN data
+
+  const scored = picksEntries.map(entry => {
+    let allPicks;
+    if (isQuickPick) {
+      allPicks = [entry.picks?.qp1, entry.picks?.qp2, entry.picks?.qp3].filter(Boolean);
+    } else {
+      allPicks = [
+        ...(Array.isArray(entry.picks?.tier1) ? entry.picks.tier1 : [entry.picks?.tier1]),
+        ...(entry.picks?.tier2 || []),
+        ...(entry.picks?.tier3 || []),
+        ...(entry.picks?.tier4 || []),
+        ...(Array.isArray(entry.picks?.tier5) ? entry.picks.tier5 : [entry.picks?.tier5])
+      ].filter(Boolean);
+    }
+
+    const golferScores = allPicks.map(name => {
+      const espn = findGolferInESPN(name, espnData);
+      if (!espn) return WD_POINTS;
+      if (espn.status === 'MC') return MC_POINTS;
+      if (espn.status === 'WD') return WD_POINTS;
+      return getPositionPoints(espn.position);
+    });
+
+    // Best N scores (lowest points = best)
+    golferScores.sort((a, b) => a - b);
+    const rawScore = golferScores.slice(0, countingSlots).reduce((sum, pts) => sum + pts, 0);
+    return { name: entry.name, rawScore };
+  });
+
+  // Sort by rawScore (lowest wins)
+  scored.sort((a, b) => a.rawScore - b.rawScore);
+
+  // Assign pool finish with tie handling
+  scored.forEach((s, i) => {
+    if (i === 0 || s.rawScore !== scored[i - 1].rawScore) {
+      s.poolFinish = i + 1;
+    } else {
+      s.poolFinish = scored[i - 1].poolFinish;
+    }
+  });
+
+  return scored;
+}
+
+// POST results to Google Sheet via Apps Script
+async function saveResultsToSheet(eventId, results) {
+  try {
+    const resp = await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({
+        action: 'saveResults',
+        eventId: eventId,
+        results: results
+      })
+    });
+    const data = await resp.json();
+    return data;
+  } catch (err) {
+    console.log('saveResultsToSheet error:', err.message);
+    return { error: err.message };
+  }
+}
+
+// Check for events that ended but have no saved results, then auto-score & save.
+// Runs on every page load after fetchAppData().
+async function autoFinalizeResults() {
+  const completedIds = new Set(COMPLETED_EVENTS.map(e => e.eventId));
+
+  // Find events past their endDate that don't have results yet
+  const unfinalizedEvents = SEASON_EVENTS.filter(ev =>
+    !ev.hidden && ev.endDate && isEventPast(ev) && !completedIds.has(ev.id)
+  );
+
+  if (unfinalizedEvents.length === 0) return;
+
+  console.log('Auto-finalize: found', unfinalizedEvents.length, 'unfinalized event(s)');
+
+  for (const ev of unfinalizedEvents) {
+    try {
+      // Fetch picks for this event
+      const picksResp = await fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${ev.id}`).then(r => r.json());
+      if (!picksResp.entries || picksResp.entries.length === 0) {
+        console.log(`Auto-finalize: No picks found for event ${ev.id} (${ev.name}), skipping.`);
+        continue;
+      }
+
+      // Fetch ESPN leaderboard
+      const espnData = await fetchESPNLeaderboard();
+      if (!espnData || !espnData.isComplete) {
+        console.log(`Auto-finalize: ESPN data not final for event ${ev.id} (${ev.name}), skipping.`);
+        continue;
+      }
+
+      // Score all entries
+      const results = scoreEvent(picksResp.entries, espnData, ev.type);
+      if (!results || results.length === 0) {
+        console.log(`Auto-finalize: Could not score event ${ev.id}, skipping.`);
+        continue;
+      }
+
+      // Save to Google Sheet
+      const saveResult = await saveResultsToSheet(ev.id, results);
+      if (saveResult.success) {
+        console.log(`Auto-finalize: Results saved for ${ev.name}!`, saveResult.message);
+        // Add to local COMPLETED_EVENTS so the page renders correctly
+        COMPLETED_EVENTS.push({ eventId: ev.id, results });
+      } else if (saveResult.alreadyExists) {
+        console.log(`Auto-finalize: Results already exist for ${ev.name}.`);
+      } else {
+        console.log(`Auto-finalize: Save failed for ${ev.name}:`, saveResult.error);
+      }
+    } catch (err) {
+      console.log(`Auto-finalize: Error processing event ${ev.id}:`, err.message);
+    }
+  }
+}
+
+// Admin-triggered manual finalize for the current leaderboard event
+async function adminFinalizeEvent() {
+  const btn = document.getElementById('adminFinalizeBtn');
+  const statusEl = document.getElementById('adminFinalizeStatus');
+  if (!btn) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Finalizing...';
+  statusEl.textContent = '';
+
+  try {
+    const evDef = getActiveEventDef();
+    if (!evDef) {
+      // Try the most recent past event without results
+      const completedIds = new Set(COMPLETED_EVENTS.map(e => e.eventId));
+      const pastUnfinalized = SEASON_EVENTS.filter(ev =>
+        !ev.hidden && ev.endDate && isEventPast(ev) && !completedIds.has(ev.id)
+      );
+      if (pastUnfinalized.length === 0) {
+        statusEl.textContent = 'No event to finalize.';
+        btn.disabled = false;
+        btn.textContent = 'Finalize Results';
+        return;
+      }
+      // Finalize the most recent unfinalized event
+      const ev = pastUnfinalized[pastUnfinalized.length - 1];
+      await finalizeSpecificEvent(ev, statusEl);
+      btn.disabled = false;
+      btn.textContent = 'Finalize Results';
+      return;
+    }
+
+    await finalizeSpecificEvent(evDef, statusEl);
+  } catch (err) {
+    statusEl.textContent = 'Error: ' + err.message;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Finalize Results';
+}
+
+async function finalizeSpecificEvent(ev, statusEl) {
+  statusEl.textContent = `Fetching data for ${ev.name}...`;
+
+  const [picksResp, espnData] = await Promise.all([
+    fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${ev.id}`).then(r => r.json()),
+    fetchESPNLeaderboard()
+  ]);
+
+  if (!picksResp.entries || picksResp.entries.length === 0) {
+    statusEl.textContent = 'No picks found for this event.';
+    return;
+  }
+
+  if (!espnData || !espnData.competitors || espnData.competitors.length === 0) {
+    statusEl.textContent = 'ESPN data unavailable. Try again later.';
+    return;
+  }
+
+  statusEl.textContent = 'Scoring entries...';
+  const results = scoreEvent(picksResp.entries, espnData, ev.type);
+  if (!results) {
+    statusEl.textContent = 'Could not score — ESPN data may not be ready.';
+    return;
+  }
+
+  statusEl.textContent = 'Saving to spreadsheet...';
+  const saveResult = await saveResultsToSheet(ev.id, results);
+
+  if (saveResult.success) {
+    COMPLETED_EVENTS.push({ eventId: ev.id, results });
+    statusEl.innerHTML = '<span style="color:var(--green);">Done! ' + saveResult.message + '</span>';
+    // Re-render the page with new results
+    renderHub();
+  } else if (saveResult.alreadyExists) {
+    statusEl.innerHTML = '<span style="color:var(--gold);">Results already saved for this event.</span>';
+  } else {
+    statusEl.textContent = 'Save failed: ' + (saveResult.error || 'Unknown error');
+  }
+}
+
+// ============================================================
 // INIT — fetch data from Google Sheet, then render
 // ============================================================
 window.addEventListener('hashchange', handleHash);
@@ -2751,6 +2968,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Auto-detect which event is active based on today's date
   ACTIVE_EVENT = detectActiveEvent();
+
+  // Auto-finalize any past events that don't have results yet
+  await autoFinalizeResults();
+
+  // Re-detect active event (may have changed after auto-finalize)
+  ACTIVE_EVENT = detectActiveEvent();
+
+  // Show admin panel if ?admin=1 is in URL
+  if (new URLSearchParams(window.location.search).get('admin') === '1') {
+    const adminPanel = document.getElementById('adminPanel');
+    if (adminPanel) adminPanel.style.display = 'block';
+  }
 
   // Render the hub with live data
   renderHub();
