@@ -751,8 +751,8 @@ html, body {
   .tourn-table th { font-size: 0.5rem; padding: 0.3rem 0.35rem; }
   .tourn-table td { padding: 0.25rem 0.35rem; }
   .tourn-pos { font-size: 0.7rem; }
-  .tourn-name { max-width: 120px; font-size: 0.68rem; }
-  .tourn-name .pick-badge { font-size: 0.4rem; padding: 0.06rem 0.2rem; }
+  .tourn-name { max-width: none; font-size: 0.68rem; white-space: normal; word-break: break-word; overflow: visible; text-overflow: unset; }
+  .tourn-name .pick-badge { font-size: 0.42rem; padding: 0.08rem 0.22rem; display: inline-block; margin-top: 0.1rem; }
   .tourn-today { font-size: 0.62rem; }
   .tourn-thru { font-size: 0.62rem; }
 
@@ -1787,11 +1787,12 @@ async function refresh() {
 function renderNoPoolEvent(appData) {
   const el = document.getElementById('poolList');
 
-  // Find next upcoming event (fallback: Masters and PGA are done)
+  // Find next upcoming event — skip events whose endDate has passed
   const FALLBACK_COMPLETED_IDS = [5, 8];
   const completedFromSheet = (appData?.completedEvents || []).map(e => e.eventId);
   const completedIds = new Set(completedFromSheet.length > 0 ? completedFromSheet : FALLBACK_COMPLETED_IDS);
-  const nextEvent = SEASON_EVENTS_TV.find(e => !completedIds.has(e.id));
+  const now = new Date();
+  const nextEvent = SEASON_EVENTS_TV.find(e => !completedIds.has(e.id) && e.endDate && now <= new Date(e.endDate));
 
   let html = '<div style="padding: 1.5rem; text-align: center;">';
 

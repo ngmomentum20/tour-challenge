@@ -371,6 +371,9 @@ body {
 .my-guy-pts {
   font-weight: 700;
   font-size: 0.85rem;
+  color: var(--text-light);
+}
+.my-guy-pts.has-bonus {
   color: var(--gold);
 }
 
@@ -1267,8 +1270,8 @@ const EVENT_TYPES = {
 // Season points by pool finish — supports up to 10 players
 const POOL_FINISH_POINTS = { 1: 10, 2: 7, 3: 5, 4: 3, 5: 2, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1 };
 
-// My Guy bonus points
-const MY_GUY_BONUS = { win: 5, top5: 3, top10: 1 };
+// My Guy bonus point rules (for reference — actual bonuses tracked in Members sheet)
+const MY_GUY_BONUS_RULES = { win: 5, top5: 3, top10: 1 };
 
 // Full season schedule
 // Full season schedule with auto-detection dates
@@ -1304,6 +1307,23 @@ const SEASON_EVENTS = [
 ];
 
 // ============================================================
+// HELPERS: event state checks
+// ============================================================
+// An event is "past" if its endDate has passed, regardless of whether
+// results have been entered. This prevents a just-finished tournament
+// from appearing as "Next Up."
+function isEventPast(ev) {
+  if (!ev.endDate) return false;
+  return new Date() > new Date(ev.endDate);
+}
+
+// Find the next truly upcoming event (not completed, not past its endDate)
+function getNextUpcomingEvent() {
+  const completedIds = new Set(COMPLETED_EVENTS.map(e => e.eventId));
+  return SEASON_EVENTS.find(e => !e.hidden && !completedIds.has(e.id) && !isEventPast(e));
+}
+
+// ============================================================
 // AUTO-DETECT ACTIVE EVENT (no manual config needed)
 // ============================================================
 function detectActiveEvent() {
@@ -1336,6 +1356,7 @@ function detectActiveEvent() {
 // No more editing this file for new events!
 let POOL_MEMBERS = [];
 let MY_GUY_PICKS = {};
+let MY_GUY_BONUS = {};
 let COMPLETED_EVENTS = [];
 let ACTIVE_EVENT = null; // { eventId, deadline }
 
@@ -1382,6 +1403,9 @@ async function fetchAppData() {
 
     if (data.myGuyPicks) {
       MY_GUY_PICKS = data.myGuyPicks;
+    }
+    if (data.myGuyBonus) {
+      MY_GUY_BONUS = data.myGuyBonus;
     }
 
     return true;
@@ -1565,6 +1589,14 @@ function computeSeasonStandings() {
     });
   });
 
+  // Add My Guy bonus points
+  Object.entries(MY_GUY_BONUS).forEach(([name, bonus]) => {
+    if (standings[name]) {
+      standings[name].points += bonus;
+      standings[name].myGuyBonus = bonus;
+    }
+  });
+
   // Convert to sorted array
   const arr = Object.entries(standings).map(([name, data]) => ({ name, ...data }));
   arr.sort((a, b) => b.points - a.points);
@@ -1682,10 +1714,17 @@ function renderMyGuyTracker() {
     return;
   }
 
-  container.innerHTML = POOL_MEMBERS.map(name => {
+  // Build entries with bonus points, sorted descending
+  const entries = POOL_MEMBERS.map(name => {
     const player = MY_GUY_PICKS[name];
-    if (!player) return '';
+    if (!player) return null;
+    const bonus = MY_GUY_BONUS[name] || 0;
+    return { name, player, bonus };
+  }).filter(Boolean).sort((a, b) => b.bonus - a.bonus);
+
+  container.innerHTML = entries.map(({ name, player, bonus }) => {
     const initials = player.split(' ').map(w => w[0]).join('');
+    const ptsClass = bonus > 0 ? ' has-bonus' : '';
     return `
       <div class="my-guy-row">
         <div class="my-guy-avatar">${initials}</div>
@@ -1693,10 +1732,10 @@ function renderMyGuyTracker() {
           <div class="my-guy-owner">${name}</div>
           <div class="my-guy-player">${player}</div>
         </div>
-        <div class="my-guy-pts">+0</div>
+        <div class="my-guy-pts${ptsClass}">+${bonus}</div>
       </div>
     `;
-  }).filter(Boolean).join('');
+  }).join('');
 }
 
 function renderPowerRankings() {
@@ -1766,9 +1805,8 @@ function renderBadges() {
 }
 
 function renderNextEvent() {
-  // Find next upcoming event
-  const completedIds = new Set(COMPLETED_EVENTS.map(e => e.eventId));
-  const nextEvent = SEASON_EVENTS.find(e => !e.hidden && !completedIds.has(e.id));
+  // Find next upcoming event (skips events whose endDate has passed)
+  const nextEvent = getNextUpcomingEvent();
 
   if (!nextEvent) {
     document.getElementById('nextEventName').textContent = 'Season Complete!';
@@ -1821,12 +1859,15 @@ function renderSchedule() {
     const isInProgress = !isCompleted && ev.startDate && ev.endDate &&
       now >= new Date(ev.startDate) && now <= new Date(ev.endDate);
 
+    // Check if event has ended but results haven't been entered yet
+    const isAwaitingResults = !isCompleted && !isInProgress && isEventPast(ev);
+
     // Check if picks are open (between picksOpen and deadline, before tournament starts)
-    const isPicksOpen = !isCompleted && !isInProgress && ev.picksOpen && ev.startDate &&
+    const isPicksOpenNow = !isCompleted && !isInProgress && !isAwaitingResults && ev.picksOpen && ev.startDate &&
       now >= new Date(ev.picksOpen) && now < new Date(ev.startDate);
 
-    // "Next Up" is the first non-completed, non-in-progress future event
-    const isNext = !isCompleted && !isInProgress && !isPicksOpen && !foundNextUp &&
+    // "Next Up" is the first non-completed, non-in-progress, non-past future event
+    const isNext = !isCompleted && !isInProgress && !isAwaitingResults && !isPicksOpenNow && !foundNextUp &&
       ev.startDate && now < new Date(ev.startDate);
 
     let statusClass = 'upcoming';
@@ -1842,7 +1883,10 @@ function renderSchedule() {
     } else if (isInProgress) {
       statusClass = 'in-progress';
       statusText = 'In Progress';
-    } else if (isPicksOpen) {
+    } else if (isAwaitingResults) {
+      statusClass = 'completed';
+      statusText = 'Awaiting Results';
+    } else if (isPicksOpenNow) {
       statusClass = 'picks-open';
       statusText = 'Picks Open';
     } else if (isNext) {
@@ -1943,8 +1987,7 @@ async function renderPicks() {
   const evDef = getActiveEventDef();
 
   if (!evDef) {
-    const completedIds = new Set(COMPLETED_EVENTS.map(e => e.eventId));
-    const nextEvent = SEASON_EVENTS.find(e => !e.hidden && !completedIds.has(e.id));
+    const nextEvent = getNextUpcomingEvent();
     let msg = 'Season complete!';
     if (nextEvent) {
       const opens = nextEvent.picksOpen ? new Date(nextEvent.picksOpen) : null;
@@ -2488,8 +2531,7 @@ async function renderLeaderboard() {
 
   // No active event at all
   if (!evDef) {
-    const completedIds = new Set(COMPLETED_EVENTS.map(e => e.eventId));
-    const nextEvent = SEASON_EVENTS.find(e => !e.hidden && !completedIds.has(e.id));
+    const nextEvent = getNextUpcomingEvent();
     container.innerHTML = `
       <div class="lb-empty">
         <h2>No Live Event</h2>
