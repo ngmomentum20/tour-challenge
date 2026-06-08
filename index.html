@@ -1922,14 +1922,19 @@ function renderHistory() {
     const evDef = SEASON_EVENTS.find(e => e.id === event.eventId);
     const evType = EVENT_TYPES[evDef.type];
     const sorted = [...event.results].sort((a, b) => a.poolFinish - b.poolFinish);
+    const winner = sorted.find(r => r.poolFinish === 1);
+    const winnerPts = winner ? (POOL_FINISH_POINTS[1] || 0) * evType.mult : 0;
 
     return `
       <div class="history-event">
         <div class="card">
           <div class="card-header" onclick="this.nextElementSibling.classList.toggle('open')">
-            <span>${evDef.name}</span>
-            <span class="mult-badge mult-${evType.mult}x" style="color:white; background:rgba(255,255,255,0.2);">${evType.label} ${evType.mult}x</span>
-            <span style="margin-left:auto; font-size:0.65rem; opacity:0.7;">${evDef.dates} &bull; ${evDef.course} &#9660;</span>
+            <div style="flex:1;">
+              <div>${evDef.name} <span class="mult-badge mult-${evType.mult}x" style="color:white; background:rgba(255,255,255,0.2);">${evType.label} ${evType.mult}x</span></div>
+              <div style="font-size:0.65rem; opacity:0.7; margin-top:0.15rem;">${evDef.dates} &bull; ${evDef.course}</div>
+            </div>
+            ${winner ? `<span class="schedule-winner" style="margin-right:0.5rem;"><svg class="inline-icon" viewBox="0 0 24 24"><path d="M6 9H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3M18 9h3a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1h-3M6 4h12v6a6 6 0 0 1-12 0V4zM9 20h6M12 16v4"/></svg> ${winner.name} (+${winnerPts})</span>` : ''}
+            <span style="font-size:0.7rem; opacity:0.5;">&#9660;</span>
           </div>
           <div class="history-detail card-body">
             <table class="history-standings">
