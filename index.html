@@ -1471,6 +1471,88 @@ const EVENT_FIELDS = {
       { name: 'Tom Hoge', rank: 72 }
     ]
   }
+  10: { // U.S. Open 2026 — Shinnecock Hills
+    format: 'full',
+    tiers: [
+      { tier: 1, name: 'Tier 1 — Favorites', picks: 1, players: [
+        { name: 'Scottie Scheffler', odds: '+460' },
+        { name: 'Rory McIlroy', odds: '+950' },
+        { name: 'Jon Rahm', odds: '+1025' },
+        { name: 'Xander Schauffele', odds: '18-1' },
+        { name: 'Cameron Young', odds: '20-1' },
+        { name: 'Matt Fitzpatrick', odds: '+2150' },
+        { name: 'Tommy Fleetwood', odds: '25-1' },
+        { name: 'Ludvig Aberg', odds: '26-1' },
+        { name: 'Bryson DeChambeau', odds: '27-1' },
+        { name: 'Brooks Koepka', odds: '33-1' }
+      ]},
+      { tier: 2, name: 'Tier 2 — Contenders', picks: 2, players: [
+        { name: 'Collin Morikawa', odds: '35-1' },
+        { name: 'Wyndham Clark', odds: '37-1' },
+        { name: 'Russell Henley', odds: '37-1' },
+        { name: 'Sam Burns', odds: '38-1' },
+        { name: 'Si Woo Kim', odds: '39-1' },
+        { name: 'Chris Gotterup', odds: '44-1' },
+        { name: 'Justin Thomas', odds: '44-1' },
+        { name: 'Tyrrell Hatton', odds: '46-1' },
+        { name: 'Patrick Cantlay', odds: '46-1' },
+        { name: 'Patrick Reed', odds: '49-1' },
+        { name: 'Justin Rose', odds: '52-1' },
+        { name: 'Viktor Hovland', odds: '54-1' }
+      ]},
+      { tier: 3, name: 'Tier 3 — Mid-Range', picks: 2, players: [
+        { name: 'J.J. Spaun', odds: '61-1' },
+        { name: 'Hideki Matsuyama', odds: '65-1' },
+        { name: 'Robert MacIntyre', odds: '66-1' },
+        { name: 'Jordan Spieth', odds: '69-1' },
+        { name: 'Joaquin Niemann', odds: '69-1' },
+        { name: 'Min Woo Lee', odds: '72-1' },
+        { name: 'Ben Griffin', odds: '74-1' },
+        { name: 'Maverick McNealy', odds: '76-1' },
+        { name: 'Adam Scott', odds: '76-1' },
+        { name: 'Kurt Kitayama', odds: '78-1' },
+        { name: 'Shane Lowry', odds: '82-1' },
+        { name: 'Harris English', odds: '88-1' },
+        { name: 'Jake Knapp', odds: '94-1' },
+        { name: 'Bud Cauley', odds: '96-1' }
+      ]},
+      { tier: 4, name: 'Tier 4 — Value Picks', picks: 2, players: [
+        { name: 'David Puig', odds: '96-1' },
+        { name: 'Alex Smalley', odds: '105-1' },
+        { name: 'Sepp Straka', odds: '105-1' },
+        { name: 'Alex Fitzpatrick', odds: '110-1' },
+        { name: 'Aaron Rai', odds: '110-1' },
+        { name: 'Ryan Gerard', odds: '110-1' },
+        { name: 'Rickie Fowler', odds: '110-1' },
+        { name: 'Kristoffer Reitan', odds: '115-1' },
+        { name: 'J.T. Poston', odds: '115-1' },
+        { name: 'Gary Woodland', odds: '115-1' },
+        { name: 'Jacob Bridgeman', odds: '130-1' },
+        { name: 'Jason Day', odds: '130-1' },
+        { name: 'Nicolai Hojgaard', odds: '130-1' },
+        { name: 'Akshay Bhatia', odds: '140-1' },
+        { name: 'Keegan Bradley', odds: '145-1' },
+        { name: 'Keith Mitchell', odds: '145-1' }
+      ]},
+      { tier: 5, name: 'Tier 5 — Long Shots', picks: 1, players: [
+        { name: 'Alex Noren', odds: '150-1' },
+        { name: 'Cameron Smith', odds: '150-1' },
+        { name: 'Dustin Johnson', odds: '170-1' },
+        { name: 'Sahith Theegala', odds: '170-1' },
+        { name: 'Harry Hall', odds: '180-1' },
+        { name: 'Tom Kim', odds: '185-1' },
+        { name: 'Pierceson Coody', odds: '190-1' },
+        { name: 'Ryan Fox', odds: '190-1' },
+        { name: 'Daniel Berger', odds: '210-1' },
+        { name: 'Corey Conners', odds: '210-1' },
+        { name: 'Sungjae Im', odds: '210-1' },
+        { name: 'Brian Harman', odds: '230-1' },
+        { name: 'Nick Taylor', odds: '230-1' },
+        { name: 'Ryo Hisatsune', odds: '240-1' },
+        { name: 'Davis Thompson', odds: '240-1' }
+      ]}
+    ]
+  }
   // Future event fields will be added here before each tournament
 };
 
@@ -1528,6 +1610,43 @@ async function getFieldForEvent(eventId) {
 // Quick Pick selection state
 let quickPickSelections = [];
 const QUICK_PICK_MAX = 3;
+
+// Tier (Full Draft) selection state — { 1: ['name'], 2: ['name','name'], ... }
+let tierSelections = { 1: [], 2: [], 3: [], 4: [], 5: [] };
+
+function toggleTierPick(tierNum, name, maxPicks) {
+  const sel = tierSelections[tierNum];
+  const idx = sel.indexOf(name);
+  if (idx >= 0) {
+    sel.splice(idx, 1);
+  } else if (sel.length < maxPicks) {
+    sel.push(name);
+  }
+  updateTierCards(tierNum, maxPicks);
+  updateFullDraftSubmitState();
+}
+
+function updateTierCards(tierNum, maxPicks) {
+  const cards = document.querySelectorAll(`.player-card[data-tier="${tierNum}"]`);
+  const sel = tierSelections[tierNum];
+  cards.forEach(card => {
+    const name = card.dataset.golfer;
+    const isSelected = sel.includes(name);
+    card.classList.toggle('selected', isSelected);
+    card.classList.toggle('disabled', !isSelected && sel.length >= maxPicks);
+    card.querySelector('.pc-check').textContent = isSelected ? '✓' : '';
+  });
+  const countEl = document.getElementById('tierCount' + tierNum);
+  if (countEl) countEl.textContent = `${sel.length} / ${maxPicks}`;
+}
+
+function updateFullDraftSubmitState() {
+  const btn = document.getElementById('submitPicks');
+  if (!btn) return;
+  // All tiers must be fully filled: 1+2+2+2+1 = 8
+  const total = Object.values(tierSelections).reduce((sum, arr) => sum + arr.length, 0);
+  btn.disabled = total < 8;
+}
 
 function toggleQuickPick(name) {
   const idx = quickPickSelections.indexOf(name);
@@ -2055,6 +2174,7 @@ async function renderPicks() {
 
   // Reset selections
   quickPickSelections = [];
+  tierSelections = { 1: [], 2: [], 3: [], 4: [], 5: [] };
 
   let formHTML = `
     <div class="picks-form">
@@ -2066,7 +2186,7 @@ async function renderPicks() {
       <div class="auth-section">
         <div class="pick-section">
           <div class="pick-label">Your Name</div>
-          <input type="text" class="pick-input" id="pickName" placeholder="e.g. Nick">
+          <input type="text" class="pick-input" id="pickName" placeholder="e.g. Nick" onblur="autoCheckMyGuy()">
         </div>
         <div class="pick-section">
           <div class="pick-label">Passcode</div>
@@ -2220,6 +2340,21 @@ async function checkMyGuyStatus(name, passcode) {
   myGuyLocked.style.display = 'none';
 }
 
+function autoCheckMyGuy() {
+  const name = document.getElementById('pickName')?.value?.trim();
+  if (!name) return;
+  // Check if this name already has a My Guy in the loaded data
+  if (MY_GUY_PICKS[name]) {
+    const myGuySection = document.getElementById('myGuySection');
+    const myGuyLocked = document.getElementById('myGuyLocked');
+    if (myGuySection) myGuySection.style.display = 'none';
+    if (myGuyLocked) {
+      myGuyLocked.style.display = 'block';
+      document.getElementById('myGuyLockedName').textContent = MY_GUY_PICKS[name];
+    }
+  }
+}
+
 async function loadMyPicks() {
   const name = document.getElementById('pickName')?.value?.trim();
   const passcode = document.getElementById('pickPasscode')?.value?.trim();
@@ -2297,15 +2432,36 @@ async function loadMyPicks() {
         updatePickCards();
       }
 
-      // Populate Full Draft fields
-      if (entry.tier1) document.getElementById('tier1') && (document.getElementById('tier1').value = entry.tier1);
-      if (entry.tier2a) document.getElementById('tier2a') && (document.getElementById('tier2a').value = entry.tier2a);
-      if (entry.tier2b) document.getElementById('tier2b') && (document.getElementById('tier2b').value = entry.tier2b);
-      if (entry.tier3a) document.getElementById('tier3a') && (document.getElementById('tier3a').value = entry.tier3a);
-      if (entry.tier3b) document.getElementById('tier3b') && (document.getElementById('tier3b').value = entry.tier3b);
-      if (entry.tier4a) document.getElementById('tier4a') && (document.getElementById('tier4a').value = entry.tier4a);
-      if (entry.tier4b) document.getElementById('tier4b') && (document.getElementById('tier4b').value = entry.tier4b);
-      if (entry.tier5) document.getElementById('tier5') && (document.getElementById('tier5').value = entry.tier5);
+      // Populate Full Draft — tier cards or text inputs
+      const hasTierCardUI = document.querySelector('.player-card[data-tier]');
+      if (hasTierCardUI) {
+        // Populate tier card selections
+        tierSelections = { 1: [], 2: [], 3: [], 4: [], 5: [] };
+        if (entry.tier1) tierSelections[1].push(entry.tier1);
+        if (entry.tier2a) tierSelections[2].push(entry.tier2a);
+        if (entry.tier2b) tierSelections[2].push(entry.tier2b);
+        if (entry.tier3a) tierSelections[3].push(entry.tier3a);
+        if (entry.tier3b) tierSelections[3].push(entry.tier3b);
+        if (entry.tier4a) tierSelections[4].push(entry.tier4a);
+        if (entry.tier4b) tierSelections[4].push(entry.tier4b);
+        if (entry.tier5) tierSelections[5].push(entry.tier5);
+        // Re-render all tier card states
+        const evField = EVENT_FIELDS[ACTIVE_EVENT.eventId];
+        if (evField && evField.tiers) {
+          evField.tiers.forEach(t => updateTierCards(t.tier, t.picks));
+        }
+        updateFullDraftSubmitState();
+      } else {
+        // Fallback text inputs
+        if (entry.tier1) document.getElementById('tier1') && (document.getElementById('tier1').value = entry.tier1);
+        if (entry.tier2a) document.getElementById('tier2a') && (document.getElementById('tier2a').value = entry.tier2a);
+        if (entry.tier2b) document.getElementById('tier2b') && (document.getElementById('tier2b').value = entry.tier2b);
+        if (entry.tier3a) document.getElementById('tier3a') && (document.getElementById('tier3a').value = entry.tier3a);
+        if (entry.tier3b) document.getElementById('tier3b') && (document.getElementById('tier3b').value = entry.tier3b);
+        if (entry.tier4a) document.getElementById('tier4a') && (document.getElementById('tier4a').value = entry.tier4a);
+        if (entry.tier4b) document.getElementById('tier4b') && (document.getElementById('tier4b').value = entry.tier4b);
+        if (entry.tier5) document.getElementById('tier5') && (document.getElementById('tier5').value = entry.tier5);
+      }
       if (entry.tbScore) document.getElementById('tbScore') && (document.getElementById('tbScore').value = entry.tbScore);
       if (entry.tbPlayoff) document.getElementById('tbPlayoff') && (document.getElementById('tbPlayoff').value = entry.tbPlayoff);
       if (entry.tbLeader) document.getElementById('tbLeader') && (document.getElementById('tbLeader').value = entry.tbLeader);
@@ -2359,6 +2515,16 @@ async function submitPicks() {
       return;
     }
   }
+  if (!isQuickPick) {
+    const hasTierCards = Object.values(tierSelections).some(arr => arr.length > 0);
+    if (hasTierCards) {
+      const total = Object.values(tierSelections).reduce((sum, arr) => sum + arr.length, 0);
+      if (total < 8) {
+        msgEl.innerHTML = '<div class="picks-msg error">Please fill all 8 tier picks (1+2+2+2+1) before submitting.</div>';
+        return;
+      }
+    }
+  }
 
   const payload = {
     action: 'submit',
@@ -2380,14 +2546,27 @@ async function submitPicks() {
       payload.qp3 = document.getElementById('qp3')?.value?.trim() || '';
     }
   } else {
-    payload.tier1 = document.getElementById('tier1')?.value?.trim() || '';
-    payload.tier2a = document.getElementById('tier2a')?.value?.trim() || '';
-    payload.tier2b = document.getElementById('tier2b')?.value?.trim() || '';
-    payload.tier3a = document.getElementById('tier3a')?.value?.trim() || '';
-    payload.tier3b = document.getElementById('tier3b')?.value?.trim() || '';
-    payload.tier4a = document.getElementById('tier4a')?.value?.trim() || '';
-    payload.tier4b = document.getElementById('tier4b')?.value?.trim() || '';
-    payload.tier5 = document.getElementById('tier5')?.value?.trim() || '';
+    // Read from tier card selections first, fall back to text inputs
+    const hasTierCards = Object.values(tierSelections).some(arr => arr.length > 0);
+    if (hasTierCards) {
+      payload.tier1 = tierSelections[1][0] || '';
+      payload.tier2a = tierSelections[2][0] || '';
+      payload.tier2b = tierSelections[2][1] || '';
+      payload.tier3a = tierSelections[3][0] || '';
+      payload.tier3b = tierSelections[3][1] || '';
+      payload.tier4a = tierSelections[4][0] || '';
+      payload.tier4b = tierSelections[4][1] || '';
+      payload.tier5 = tierSelections[5][0] || '';
+    } else {
+      payload.tier1 = document.getElementById('tier1')?.value?.trim() || '';
+      payload.tier2a = document.getElementById('tier2a')?.value?.trim() || '';
+      payload.tier2b = document.getElementById('tier2b')?.value?.trim() || '';
+      payload.tier3a = document.getElementById('tier3a')?.value?.trim() || '';
+      payload.tier3b = document.getElementById('tier3b')?.value?.trim() || '';
+      payload.tier4a = document.getElementById('tier4a')?.value?.trim() || '';
+      payload.tier4b = document.getElementById('tier4b')?.value?.trim() || '';
+      payload.tier5 = document.getElementById('tier5')?.value?.trim() || '';
+    }
     payload.tbScore = document.getElementById('tbScore')?.value?.trim() || '';
     payload.tbPlayoff = document.getElementById('tbPlayoff')?.value || '';
     payload.tbLeader = document.getElementById('tbLeader')?.value?.trim() || '';
