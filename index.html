@@ -1194,7 +1194,7 @@ svg.inline-icon.icon-dark { stroke: var(--pga-dark); }
       </div>
 
       <div class="rules-section">
-        <h3>Position Points</h3>
+        <h3>Scoring — Events 1-10 (Original)</h3>
         <div class="rules-points-grid">
           <div>1st — 1 pt</div><div>2nd — 2 pts</div><div>3rd — 3 pts</div>
           <div>4th — 4 pts</div><div>5th — 5 pts</div><div>6th — 6 pts</div>
@@ -1205,6 +1205,22 @@ svg.inline-icon.icon-dark { stroke: var(--pga-dark); }
           <div>WD/DQ — 55 pts</div>
         </div>
         <p><em>Lower score is better. Your counting golfers' position points are summed for a raw score.</em></p>
+      </div>
+
+      <div class="rules-section">
+        <h3>Scoring — Travelers Championship Onward (New)</h3>
+        <p>Starting with Event 11, a weighted fantasy points system rewards picking golfers who finish higher on the leaderboard.</p>
+        <div class="rules-points-grid">
+          <div>1st — 50 pts</div><div>2nd — 45 pts</div><div>3rd — 40 pts</div>
+          <div>4th — 37 pts</div><div>5th — 35 pts</div><div>6th — 32 pts</div>
+          <div>7th — 29 pts</div><div>8th — 27 pts</div><div>9-10th — 25 pts</div>
+          <div>11-15th — 20 pts</div><div>16-20th — 15 pts</div><div>21-25th — 10 pts</div>
+          <div>26-30th — 7 pts</div><div>31-40th — 5 pts</div><div>41-50th — 3 pts</div>
+          <div>51-60th — 2 pts</div><div>61+ — 1 pt</div><div>MC/WD — 0 pts</div>
+        </div>
+        <p><em>Higher score is better. Your best counting picks get weight multipliers:</em></p>
+        <p><strong>Majors & Playoffs (best 4 of 8):</strong> Top pick ×2.0, 2nd ×1.5, 3rd ×1.25, 4th ×1.0</p>
+        <p><strong>Signature Events (best 2 of 3):</strong> Top pick ×1.5, 2nd ×1.0</p>
       </div>
 
       <div class="rules-section">
@@ -2047,9 +2063,11 @@ function renderHistory() {
   container.innerHTML = completed.map(event => {
     const evDef = SEASON_EVENTS.find(e => e.id === event.eventId);
     const evType = EVENT_TYPES[evDef.type];
+    const isNew = useNewScoring(event.eventId);
     const sorted = [...event.results].sort((a, b) => a.poolFinish - b.poolFinish);
     const winner = sorted.find(r => r.poolFinish === 1);
     const winnerPts = winner ? (POOL_FINISH_POINTS[1] || 0) * evType.mult : 0;
+    const scoreLabel = isNew ? 'Weighted Score' : 'Raw Score';
 
     return `
       <div class="history-event">
@@ -2068,7 +2086,7 @@ function renderHistory() {
                 <tr>
                   <th>Finish</th>
                   <th>Player</th>
-                  <th>Raw Score</th>
+                  <th>${scoreLabel}</th>
                   <th>Season Pts</th>
                 </tr>
               </thead>
@@ -2087,11 +2105,95 @@ function renderHistory() {
                 }).join('')}
               </tbody>
             </table>
+            <div style="text-align:center; margin-top:0.75rem;">
+              <button class="load-picks-btn" onclick="loadHistoryPicks(${event.eventId}, this)"
+                style="background:none; border:1.5px solid var(--cream-dark); border-radius:8px; padding:0.4rem 1rem; font-family:'DM Sans',sans-serif; font-size:0.68rem; color:var(--pga-dark); cursor:pointer; font-weight:600;">
+                View All Picks
+              </button>
+            </div>
+            <div id="historyPicks${event.eventId}" style="margin-top:0.5rem;"></div>
           </div>
         </div>
       </div>
     `;
   }).join('');
+}
+
+async function loadHistoryPicks(eventId, btn) {
+  const container = document.getElementById('historyPicks' + eventId);
+  if (!container) return;
+
+  // Toggle: if already loaded, just toggle visibility
+  if (container.dataset.loaded === 'true') {
+    container.style.display = container.style.display === 'none' ? 'block' : 'none';
+    btn.textContent = container.style.display === 'none' ? 'View All Picks' : 'Hide Picks';
+    return;
+  }
+
+  btn.textContent = 'Loading...';
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${eventId}`);
+    const data = await resp.json();
+
+    if (!data.entries || data.entries.length === 0) {
+      container.innerHTML = '<p style="font-size:0.7rem; color:var(--text-light); text-align:center;">No pick data available for this event.</p>';
+      container.dataset.loaded = 'true';
+      btn.textContent = 'Hide Picks';
+      btn.disabled = false;
+      return;
+    }
+
+    const evDef = SEASON_EVENTS.find(e => e.id === eventId);
+    const isQuickPick = evDef?.type === 'SIGNATURE';
+
+    let html = '';
+    data.entries.forEach(entry => {
+      let picks;
+      if (isQuickPick || entry.format === 'quick') {
+        picks = [
+          { label: 'Pick 1', name: entry.picks?.qp1 },
+          { label: 'Pick 2', name: entry.picks?.qp2 },
+          { label: 'Pick 3', name: entry.picks?.qp3 }
+        ].filter(p => p.name);
+      } else {
+        const t1 = Array.isArray(entry.picks?.tier1) ? entry.picks.tier1 : [entry.picks?.tier1];
+        const t2 = entry.picks?.tier2 || [];
+        const t3 = entry.picks?.tier3 || [];
+        const t4 = entry.picks?.tier4 || [];
+        const t5 = Array.isArray(entry.picks?.tier5) ? entry.picks.tier5 : [entry.picks?.tier5];
+        picks = [
+          ...t1.filter(Boolean).map(n => ({ label: 'T1', name: n })),
+          ...t2.filter(Boolean).map(n => ({ label: 'T2', name: n })),
+          ...t3.filter(Boolean).map(n => ({ label: 'T3', name: n })),
+          ...t4.filter(Boolean).map(n => ({ label: 'T4', name: n })),
+          ...t5.filter(Boolean).map(n => ({ label: 'T5', name: n }))
+        ];
+      }
+
+      html += `
+        <div style="background:var(--white); border-radius:8px; padding:0.6rem; margin-bottom:0.5rem; box-shadow:var(--shadow);">
+          <div style="font-weight:700; font-size:0.72rem; color:var(--pga-dark); margin-bottom:0.35rem; border-bottom:1px solid var(--cream); padding-bottom:0.25rem;">${entry.name}</div>
+          ${picks.map(p => `
+            <div style="display:flex; justify-content:space-between; padding:0.2rem 0; font-size:0.68rem; border-bottom:1px solid var(--cream);">
+              <span>${p.name}</span>
+              <span style="color:var(--text-light); font-size:0.6rem;">${p.label}</span>
+            </div>
+          `).join('')}
+          ${entry.bonus?.winner ? `<div style="font-size:0.6rem; color:var(--text-light); margin-top:0.3rem;">Winner pick: ${entry.bonus.winner}${entry.bonus.score ? ' &bull; Score: ' + entry.bonus.score : ''}</div>` : ''}
+        </div>`;
+    });
+
+    container.innerHTML = html;
+    container.dataset.loaded = 'true';
+    btn.textContent = 'Hide Picks';
+    btn.disabled = false;
+  } catch (err) {
+    container.innerHTML = '<p style="font-size:0.7rem; color:var(--red); text-align:center;">Failed to load picks. Try again.</p>';
+    btn.textContent = 'View All Picks';
+    btn.disabled = false;
+  }
 }
 
 // ACTIVE_EVENT is auto-detected from SEASON_EVENTS dates.
@@ -2619,6 +2721,43 @@ function getPositionPoints(pos) {
   return 48;
 }
 
+// ============================================================
+// NEW WEIGHTED SCORING (Event 11+ / Travelers onward)
+// Higher = better. Best picks get bonus multipliers.
+// ============================================================
+const NEW_SCORING_START = 11; // First event using new system
+
+function useNewScoring(eventId) {
+  return eventId >= NEW_SCORING_START;
+}
+
+// Fantasy points: higher = better finish
+function getFantasyPoints(pos) {
+  if (pos <= 0) return 0;
+  if (pos === 1) return 50;
+  if (pos === 2) return 45;
+  if (pos === 3) return 40;
+  if (pos === 4) return 37;
+  if (pos === 5) return 35;
+  if (pos === 6) return 32;
+  if (pos === 7) return 29;
+  if (pos === 8) return 27;
+  if (pos <= 10) return 25;
+  if (pos <= 15) return 20;
+  if (pos <= 20) return 15;
+  if (pos <= 25) return 10;
+  if (pos <= 30) return 7;
+  if (pos <= 40) return 5;
+  if (pos <= 50) return 3;
+  if (pos <= 60) return 2;
+  return 1; // 61+
+}
+// MC = 0, WD/DQ = 0 (handled in scoring functions)
+
+// Weight multipliers: best picks earn more
+const MAJOR_WEIGHTS = [2.0, 1.5, 1.25, 1.0];       // best 4 of 8
+const SIGNATURE_WEIGHTS = [1.5, 1.0];               // best 2 of 3
+
 function normalizeName(name) {
   return name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z\s]/g, '').trim();
 }
@@ -2766,6 +2905,8 @@ async function renderLeaderboard() {
     const countingSlots = isQuickPick ? 2 : 4;
     const hasESPN = espnData && espnData.competitors && espnData.competitors.length > 0;
 
+    const isNew = useNewScoring(ACTIVE_EVENT.eventId);
+
     // Build scored standings for each entry
     const standings = picksResp.entries.map(entry => {
       let allPicks;
@@ -2786,15 +2927,17 @@ async function renderLeaderboard() {
         let points, posDisplay, scoreToPar, thru, status;
 
         if (!espn) {
-          points = hasESPN ? WD_POINTS : 0;
+          points = hasESPN ? (isNew ? 0 : WD_POINTS) : 0;
           posDisplay = hasESPN ? 'N/A' : '—';
           scoreToPar = ''; thru = ''; status = 'unknown';
         } else if (espn.status === 'MC') {
-          points = MC_POINTS; posDisplay = 'MC'; scoreToPar = espn.scoreToPar; thru = ''; status = 'MC';
+          points = isNew ? 0 : MC_POINTS;
+          posDisplay = 'MC'; scoreToPar = espn.scoreToPar; thru = ''; status = 'MC';
         } else if (espn.status === 'WD') {
-          points = WD_POINTS; posDisplay = 'WD'; scoreToPar = ''; thru = ''; status = 'WD';
+          points = isNew ? 0 : WD_POINTS;
+          posDisplay = 'WD'; scoreToPar = ''; thru = ''; status = 'WD';
         } else {
-          points = getPositionPoints(espn.position);
+          points = isNew ? getFantasyPoints(espn.position) : getPositionPoints(espn.position);
           posDisplay = espn.posDisplay; scoreToPar = espn.scoreToPar;
           thru = espn.thru; status = 'active';
         }
@@ -2802,18 +2945,44 @@ async function renderLeaderboard() {
         return { name, points, posDisplay, scoreToPar, thru, status };
       });
 
-      // Sort by points to determine counting picks
-      const sorted = [...golfers].sort((a, b) => a.points - b.points);
-      const countingSet = new Set(sorted.slice(0, countingSlots).map(g => golfers.indexOf(g)));
-      golfers.forEach((g, i) => { g.counting = countingSet.has(i); });
+      if (isNew) {
+        // NEW: Sort descending (highest fantasy points first), apply weights
+        const sorted = [...golfers].sort((a, b) => b.points - a.points);
+        const countingSet = new Set(sorted.slice(0, countingSlots).map(g => golfers.indexOf(g)));
+        golfers.forEach((g, i) => { g.counting = countingSet.has(i); });
 
-      const totalPoints = hasESPN ? sorted.slice(0, countingSlots).reduce((sum, g) => sum + g.points, 0) : null;
-      return { name: entry.name, totalPoints, golfers, pickCount: allPicks.length };
+        const weights = isQuickPick ? SIGNATURE_WEIGHTS : MAJOR_WEIGHTS;
+        let totalPoints = null;
+        if (hasESPN) {
+          totalPoints = 0;
+          for (let w = 0; w < countingSlots && w < sorted.length; w++) {
+            const weighted = sorted[w].points * (weights[w] || 1.0);
+            totalPoints += weighted;
+            // Tag the golfer with its weighted contribution
+            const origIdx = golfers.indexOf(sorted[w]);
+            if (origIdx >= 0) golfers[origIdx].weighted = Math.round(weighted * 10) / 10;
+          }
+          totalPoints = Math.round(totalPoints * 10) / 10;
+        }
+        return { name: entry.name, totalPoints, golfers, pickCount: allPicks.length };
+      } else {
+        // OLD: Sort ascending (lowest points first), straight sum
+        const sorted = [...golfers].sort((a, b) => a.points - b.points);
+        const countingSet = new Set(sorted.slice(0, countingSlots).map(g => golfers.indexOf(g)));
+        golfers.forEach((g, i) => { g.counting = countingSet.has(i); });
+
+        const totalPoints = hasESPN ? sorted.slice(0, countingSlots).reduce((sum, g) => sum + g.points, 0) : null;
+        return { name: entry.name, totalPoints, golfers, pickCount: allPicks.length };
+      }
     });
 
-    // Sort by total points (lowest first)
+    // Sort: new = highest wins, old = lowest wins
     if (hasESPN) {
-      standings.sort((a, b) => a.totalPoints - b.totalPoints);
+      if (isNew) {
+        standings.sort((a, b) => b.totalPoints - a.totalPoints);
+      } else {
+        standings.sort((a, b) => a.totalPoints - b.totalPoints);
+      }
     }
 
     // Assign ranks with tie handling
@@ -2843,6 +3012,10 @@ async function renderLeaderboard() {
         </div>
         <div class="lb-refresh-bar">Last updated: ${new Date().toLocaleTimeString()} &middot; <a href="#" onclick="renderLeaderboard(); return false;" style="color:var(--gold);">Refresh</a></div>`;
 
+    const scoringLabel = isNew
+      ? (isQuickPick ? 'weighted best 2 of 3' : 'weighted best 4 of 8')
+      : (isQuickPick ? 'best 2 of 3' : 'best 4 of 8');
+
     standings.forEach((entry, i) => {
       html += `
         <div class="lb-entry ${i === 0 ? 'leader' : ''}">
@@ -2851,18 +3024,19 @@ async function renderLeaderboard() {
             <div class="lb-name">${entry.name}</div>
             <div>
               <div class="lb-score">${hasESPN ? entry.totalPoints + ' pts' : entry.pickCount + ' picks'}</div>
-              <div class="lb-score-label">${hasESPN ? (isQuickPick ? 'best 2 of 3' : 'best 4 of 8') : 'submitted'}</div>
+              <div class="lb-score-label">${hasESPN ? scoringLabel : 'submitted'}</div>
             </div>
           </div>
           <div class="lb-detail">
             ${entry.golfers.map(g => {
               const rowClass = hasESPN ? (g.counting ? 'counting' : 'not-counting') : '';
+              const weightTag = (isNew && g.counting && g.weighted !== undefined) ? `<span style="font-size:0.55rem; color:var(--gold); font-weight:600; min-width:2rem; text-align:right;">${g.weighted}</span>` : '';
               const posCol = hasESPN
-                ? `<span class="lb-golfer-pos" style="font-weight:600;">${g.posDisplay}</span><span style="font-size:0.6rem; color:var(--text-light); width:2rem; text-align:center;">${g.scoreToPar || ''}</span>${g.thru ? `<span style="font-size:0.55rem; color:var(--text-light); width:1.5rem; text-align:center;">${g.thru}</span>` : ''}`
+                ? `<span class="lb-golfer-pos" style="font-weight:600;">${g.posDisplay}</span><span style="font-size:0.6rem; color:var(--text-light); width:2rem; text-align:center;">${g.scoreToPar || ''}</span>${g.thru ? `<span style="font-size:0.55rem; color:var(--text-light); width:1.5rem; text-align:center;">${g.thru}</span>` : ''}${weightTag}`
                 : `<span class="lb-golfer-pos">—</span>`;
               return `
               <div class="lb-golfer-row ${rowClass}">
-                <span>${g.name}${g.counting && hasESPN ? '' : ''}</span>
+                <span>${g.name}</span>
                 <span style="display:flex; align-items:center; gap:0.3rem;">${posCol}</span>
               </div>`;
             }).join('')}
@@ -2932,10 +3106,11 @@ function handleHash() {
 
 // Extract scoring logic into a reusable function.
 // Returns sorted array: [{ name, rawScore, poolFinish }]
-function scoreEvent(picksEntries, espnData, eventType) {
+function scoreEvent(picksEntries, espnData, eventType, eventId) {
   const isQuickPick = eventType === 'SIGNATURE';
   const countingSlots = isQuickPick ? 2 : 4;
   const hasESPN = espnData && espnData.competitors && espnData.competitors.length > 0;
+  const isNew = useNewScoring(eventId || 0);
 
   if (!hasESPN) return null; // Can't score without ESPN data
 
@@ -2953,22 +3128,46 @@ function scoreEvent(picksEntries, espnData, eventType) {
       ].filter(Boolean);
     }
 
-    const golferScores = allPicks.map(name => {
-      const espn = findGolferInESPN(name, espnData);
-      if (!espn) return WD_POINTS;
-      if (espn.status === 'MC') return MC_POINTS;
-      if (espn.status === 'WD') return WD_POINTS;
-      return getPositionPoints(espn.position);
-    });
+    if (isNew) {
+      // NEW SCORING: Fantasy points (higher = better) with weight multipliers
+      const golferScores = allPicks.map(name => {
+        const espn = findGolferInESPN(name, espnData);
+        if (!espn) return 0;
+        if (espn.status === 'MC' || espn.status === 'WD') return 0;
+        return getFantasyPoints(espn.position);
+      });
 
-    // Best N scores (lowest points = best)
-    golferScores.sort((a, b) => a - b);
-    const rawScore = golferScores.slice(0, countingSlots).reduce((sum, pts) => sum + pts, 0);
-    return { name: entry.name, rawScore };
+      // Sort descending (highest fantasy points first)
+      golferScores.sort((a, b) => b - a);
+      const weights = isQuickPick ? SIGNATURE_WEIGHTS : MAJOR_WEIGHTS;
+      let rawScore = 0;
+      for (let i = 0; i < countingSlots && i < golferScores.length; i++) {
+        rawScore += golferScores[i] * (weights[i] || 1.0);
+      }
+      rawScore = Math.round(rawScore * 10) / 10; // 1 decimal
+      return { name: entry.name, rawScore };
+    } else {
+      // OLD SCORING: Position points (lower = better), straight sum
+      const golferScores = allPicks.map(name => {
+        const espn = findGolferInESPN(name, espnData);
+        if (!espn) return WD_POINTS;
+        if (espn.status === 'MC') return MC_POINTS;
+        if (espn.status === 'WD') return WD_POINTS;
+        return getPositionPoints(espn.position);
+      });
+
+      golferScores.sort((a, b) => a - b);
+      const rawScore = golferScores.slice(0, countingSlots).reduce((sum, pts) => sum + pts, 0);
+      return { name: entry.name, rawScore };
+    }
   });
 
-  // Sort by rawScore (lowest wins)
-  scored.sort((a, b) => a.rawScore - b.rawScore);
+  // Sort: new = highest wins, old = lowest wins
+  if (isNew) {
+    scored.sort((a, b) => b.rawScore - a.rawScore);
+  } else {
+    scored.sort((a, b) => a.rawScore - b.rawScore);
+  }
 
   // Assign pool finish with tie handling
   scored.forEach((s, i) => {
@@ -3033,7 +3232,7 @@ async function autoFinalizeResults() {
       }
 
       // Score all entries
-      const results = scoreEvent(picksResp.entries, espnData, ev.type);
+      const results = scoreEvent(picksResp.entries, espnData, ev.type, ev.id);
       if (!results || results.length === 0) {
         console.log(`Auto-finalize: Could not score event ${ev.id}, skipping.`);
         continue;
@@ -3115,7 +3314,7 @@ async function finalizeSpecificEvent(ev, statusEl) {
   }
 
   statusEl.textContent = 'Scoring entries...';
-  const results = scoreEvent(picksResp.entries, espnData, ev.type);
+  const results = scoreEvent(picksResp.entries, espnData, ev.type, ev.id);
   if (!results) {
     statusEl.textContent = 'Could not score — ESPN data may not be ready.';
     return;

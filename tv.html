@@ -751,8 +751,9 @@ html, body {
   .tourn-table th { font-size: 0.5rem; padding: 0.3rem 0.35rem; }
   .tourn-table td { padding: 0.25rem 0.35rem; }
   .tourn-pos { font-size: 0.7rem; }
-  .tourn-name { max-width: none; font-size: 0.68rem; white-space: normal; word-break: break-word; overflow: visible; text-overflow: unset; }
-  .tourn-name .pick-badge { font-size: 0.42rem; padding: 0.08rem 0.22rem; display: inline-block; margin-top: 0.1rem; }
+  .tourn-table td { white-space: normal; }
+  .tourn-name { max-width: none; font-size: 0.68rem; white-space: normal !important; word-break: break-word; overflow: visible !important; text-overflow: unset; }
+  .tourn-name .pick-badge { font-size: 0.42rem; padding: 0.08rem 0.22rem; display: inline-block; margin-top: 0.15rem; margin-left: 0.15rem; }
   .tourn-today { font-size: 0.62rem; }
   .tourn-thru { font-size: 0.62rem; }
 
@@ -784,7 +785,7 @@ html, body {
   .pool-name { font-size: 0.75rem; }
   .pool-pts { font-size: 0.95rem; }
   .golfer-chip { font-size: 0.48rem; padding: 0.12rem 0.3rem; }
-  .tourn-name { max-width: 100px; }
+  .tourn-name { max-width: none; font-size: 0.6rem; }
   .gs-major { width: 26px; font-size: 0.45rem; }
 }
 </style>
@@ -916,6 +917,33 @@ function getPointsForPosition(pos) {
 }
 const MC_POINTS = 50;
 const WD_POINTS = 55;
+
+// New weighted scoring system (Event 11+)
+const NEW_SCORING_START_TV = 11;
+function useNewScoringTV(eventId) { return eventId >= NEW_SCORING_START_TV; }
+
+function getFantasyPointsTV(pos) {
+  if (pos <= 0) return 0;
+  if (pos === 1) return 50;
+  if (pos === 2) return 45;
+  if (pos === 3) return 40;
+  if (pos === 4) return 37;
+  if (pos === 5) return 35;
+  if (pos === 6) return 32;
+  if (pos === 7) return 29;
+  if (pos === 8) return 27;
+  if (pos <= 10) return 25;
+  if (pos <= 15) return 20;
+  if (pos <= 20) return 15;
+  if (pos <= 25) return 10;
+  if (pos <= 30) return 7;
+  if (pos <= 40) return 5;
+  if (pos <= 50) return 3;
+  if (pos <= 60) return 2;
+  return 1;
+}
+const MAJOR_WEIGHTS_TV = [2.0, 1.5, 1.25, 1.0];
+const SIGNATURE_WEIGHTS_TV = [1.5, 1.0];
 
 let tournamentData = null;
 let isTournamentComplete = false;
@@ -1206,17 +1234,16 @@ function getTier(entry, name) {
   return 0;
 }
 
-function calculateStandings(entries, format) {
+function calculateStandings(entries, format, eventId) {
   const isQuick = format === 'quick';
   const countingSlots = isQuick ? 2 : 4;
+  const isNew = useNewScoringTV(eventId || 0);
 
   const standings = entries.map(entry => {
     let allPicks;
     if (isQuick) {
-      // Quick Pick: 3 golfers from qp1/qp2/qp3
       allPicks = [entry.picks?.qp1, entry.picks?.qp2, entry.picks?.qp3].filter(Boolean);
     } else {
-      // Full Draft: 8 golfers from tiers
       allPicks = [
         ...(entry.picks?.tier1 || []), ...(entry.picks?.tier2 || []),
         ...(entry.picks?.tier3 || []), ...(entry.picks?.tier4 || []),
@@ -1228,22 +1255,47 @@ function calculateStandings(entries, format) {
       const score = findGolferScore(name);
       const tier = isQuick ? 'QP' : getTier(entry, name);
       let points;
-      if (!score) { points = WD_POINTS; return { name, tier, points, posDisplay: 'N/A', status: 'unknown' }; }
-      if (score.status === 'MC') points = MC_POINTS;
-      else if (score.status === 'WD') points = WD_POINTS;
-      else points = getPointsForPosition(score.position);
+      if (isNew) {
+        if (!score) { points = 0; return { name, tier, points, posDisplay: 'N/A', status: 'unknown' }; }
+        if (score.status === 'MC' || score.status === 'WD') points = 0;
+        else points = getFantasyPointsTV(score.position);
+      } else {
+        if (!score) { points = WD_POINTS; return { name, tier, points, posDisplay: 'N/A', status: 'unknown' }; }
+        if (score.status === 'MC') points = MC_POINTS;
+        else if (score.status === 'WD') points = WD_POINTS;
+        else points = getPointsForPosition(score.position);
+      }
       return { name, tier, points, posDisplay: score.posDisplay, scoreToPar: score.scoreToPar, status: score.status };
     });
 
-    const sorted = [...golfers].sort((a, b) => a.points - b.points);
-    const countingSet = new Set(sorted.slice(0, countingSlots).map(g => golfers.indexOf(g)));
-    golfers.forEach((g, i) => { g.counting = countingSet.has(i); });
-
-    const totalPoints = sorted.slice(0, countingSlots).reduce((sum, g) => sum + g.points, 0);
-    return { name: entry.name, totalPoints, golfers, tiebreakers: entry.tiebreakers || {} };
+    if (isNew) {
+      // Higher = better; sort descending to find best picks
+      const sorted = [...golfers].sort((a, b) => b.points - a.points);
+      const weights = isQuick ? SIGNATURE_WEIGHTS_TV : MAJOR_WEIGHTS_TV;
+      const countingSet = new Set(sorted.slice(0, countingSlots).map(g => golfers.indexOf(g)));
+      golfers.forEach((g, i) => {
+        g.counting = countingSet.has(i);
+        if (g.counting) {
+          const rank = sorted.findIndex(s => golfers.indexOf(s) === i);
+          g.weighted = Math.round(g.points * (weights[rank] || 1.0) * 10) / 10;
+        }
+      });
+      const totalPoints = sorted.slice(0, countingSlots).reduce((sum, g, idx) => sum + g.points * (weights[idx] || 1.0), 0);
+      return { name: entry.name, totalPoints: Math.round(totalPoints * 10) / 10, golfers, tiebreakers: entry.tiebreakers || {} };
+    } else {
+      const sorted = [...golfers].sort((a, b) => a.points - b.points);
+      const countingSet = new Set(sorted.slice(0, countingSlots).map(g => golfers.indexOf(g)));
+      golfers.forEach((g, i) => { g.counting = countingSet.has(i); });
+      const totalPoints = sorted.slice(0, countingSlots).reduce((sum, g) => sum + g.points, 0);
+      return { name: entry.name, totalPoints, golfers, tiebreakers: entry.tiebreakers || {} };
+    }
   });
 
-  standings.sort((a, b) => a.totalPoints - b.totalPoints);
+  if (isNew) {
+    standings.sort((a, b) => b.totalPoints - a.totalPoints);
+  } else {
+    standings.sort((a, b) => a.totalPoints - b.totalPoints);
+  }
 
   // Tiebreaker-aware sub-sort for entries with the same point total
   if (tournamentData && tournamentData.competitors && tournamentData.competitors.length > 0) {
@@ -1256,7 +1308,7 @@ function calculateStandings(entries, format) {
     const actualLeader = typeof SATURDAY_LEADER !== 'undefined' && SATURDAY_LEADER ? SATURDAY_LEADER.trim().toLowerCase() : null;
 
     standings.sort((a, b) => {
-      if (a.totalPoints !== b.totalPoints) return a.totalPoints - b.totalPoints;
+      if (a.totalPoints !== b.totalPoints) return isNew ? b.totalPoints - a.totalPoints : a.totalPoints - b.totalPoints;
       const tbA = a.tiebreakers || {};
       const tbB = b.tiebreakers || {};
       // TB1: Closest to winning score
@@ -1766,7 +1818,7 @@ async function refresh() {
     const poolData = await fetchPoolEntries(activeEventDef.id);
 
     if (poolData && poolData.entries && poolData.entries.length > 0) {
-      const standings = calculateStandings(poolData.entries, activeEventDef.format);
+      const standings = calculateStandings(poolData.entries, activeEventDef.format, activeEventDef.id);
       renderPool(standings);
       renderGrandSlam(standings);
       renderTicker(standings);
