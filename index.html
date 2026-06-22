@@ -2134,10 +2134,13 @@ async function loadHistoryPicks(eventId, btn) {
   btn.disabled = true;
 
   try {
-    const resp = await fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${eventId}`);
-    const data = await resp.json();
+    // Fetch picks AND ESPN data in parallel
+    const [picksResp, espnData] = await Promise.all([
+      fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${eventId}`).then(r => r.json()),
+      fetchESPNLeaderboard().catch(() => null)
+    ]);
 
-    if (!data.entries || data.entries.length === 0) {
+    if (!picksResp.entries || picksResp.entries.length === 0) {
       container.innerHTML = '<p style="font-size:0.7rem; color:var(--text-light); text-align:center;">No pick data available for this event.</p>';
       container.dataset.loaded = 'true';
       btn.textContent = 'Hide Picks';
@@ -2147,15 +2150,26 @@ async function loadHistoryPicks(eventId, btn) {
 
     const evDef = SEASON_EVENTS.find(e => e.id === eventId);
     const isQuickPick = evDef?.type === 'SIGNATURE';
+    const isNew = useNewScoring(eventId);
+    const countingSlots = isQuickPick ? 2 : 4;
+    const hasESPN = espnData && espnData.competitors && espnData.competitors.length > 0;
+
+    // Find this event's results for raw score lookup
+    const eventResults = COMPLETED_EVENTS.find(ce => ce.eventId === eventId);
+    const resultsMap = {};
+    if (eventResults) {
+      eventResults.results.forEach(r => { resultsMap[r.name.toLowerCase()] = r; });
+    }
 
     let html = '';
-    data.entries.forEach(entry => {
+    picksResp.entries.forEach(entry => {
+      // Extract all picks
       let picks;
       if (isQuickPick || entry.format === 'quick') {
         picks = [
-          { label: 'Pick 1', name: entry.picks?.qp1 },
-          { label: 'Pick 2', name: entry.picks?.qp2 },
-          { label: 'Pick 3', name: entry.picks?.qp3 }
+          { label: 'QP', name: entry.picks?.qp1 },
+          { label: 'QP', name: entry.picks?.qp2 },
+          { label: 'QP', name: entry.picks?.qp3 }
         ].filter(p => p.name);
       } else {
         const t1 = Array.isArray(entry.picks?.tier1) ? entry.picks.tier1 : [entry.picks?.tier1];
@@ -2172,20 +2186,105 @@ async function loadHistoryPicks(eventId, btn) {
         ];
       }
 
+      // Score each golfer if ESPN data available
+      let scoredPicks = picks.map(p => {
+        const g = hasESPN ? findGolferInESPN(p.name, espnData) : null;
+        let pts = null, pos = null, posDisplay = '—', weighted = null;
+        if (g) {
+          posDisplay = g.posDisplay || '—';
+          pos = g.position;
+          if (isNew) {
+            pts = (g.status === 'MC' || g.status === 'WD') ? 0 : getFantasyPoints(g.position);
+          } else {
+            if (g.status === 'MC') pts = MC_POINTS;
+            else if (g.status === 'WD') pts = WD_POINTS;
+            else pts = getPositionPoints(g.position);
+          }
+        }
+        return { ...p, pts, pos, posDisplay, weighted };
+      });
+
+      // Determine counting picks
+      if (hasESPN && scoredPicks.some(p => p.pts !== null)) {
+        const sorted = [...scoredPicks].filter(p => p.pts !== null);
+        if (isNew) {
+          sorted.sort((a, b) => b.pts - a.pts); // highest first
+        } else {
+          sorted.sort((a, b) => a.pts - b.pts); // lowest first
+        }
+        const countingNames = new Set(sorted.slice(0, countingSlots).map(p => p.name));
+        const weights = isNew ? (isQuickPick ? SIGNATURE_WEIGHTS : MAJOR_WEIGHTS) : null;
+
+        // Assign counting status and weights
+        let weightIdx = 0;
+        const sortedCounting = sorted.filter(p => countingNames.has(p.name)).slice(0, countingSlots);
+        scoredPicks.forEach(p => {
+          p.counting = countingNames.has(p.name);
+          if (p.counting && weights) {
+            const rank = sortedCounting.findIndex(s => s.name === p.name);
+            p.weighted = Math.round(p.pts * (weights[rank] || 1.0) * 10) / 10;
+          }
+        });
+      }
+
+      // Calculate total from counting picks
+      let total = null;
+      if (hasESPN && scoredPicks.some(p => p.pts !== null)) {
+        if (isNew) {
+          total = scoredPicks.filter(p => p.counting).reduce((sum, p) => sum + (p.weighted || 0), 0);
+          total = Math.round(total * 10) / 10;
+        } else {
+          total = scoredPicks.filter(p => p.counting).reduce((sum, p) => sum + (p.pts || 0), 0);
+        }
+      }
+
+      // Fallback: get raw score from saved results
+      const savedResult = resultsMap[entry.name.toLowerCase()];
+      const displayTotal = total !== null ? total : (savedResult ? savedResult.rawScore : '—');
+
+      // Build the card
+      const ptsLabel = isNew ? 'Fantasy Pts' : 'Pos Pts';
       html += `
-        <div style="background:var(--white); border-radius:8px; padding:0.6rem; margin-bottom:0.5rem; box-shadow:var(--shadow);">
-          <div style="font-weight:700; font-size:0.72rem; color:var(--pga-dark); margin-bottom:0.35rem; border-bottom:1px solid var(--cream); padding-bottom:0.25rem;">${entry.name}</div>
-          ${picks.map(p => `
-            <div style="display:flex; justify-content:space-between; padding:0.2rem 0; font-size:0.68rem; border-bottom:1px solid var(--cream);">
-              <span>${p.name}</span>
-              <span style="color:var(--text-light); font-size:0.6rem;">${p.label}</span>
-            </div>
-          `).join('')}
-          ${entry.bonus?.winner ? `<div style="font-size:0.6rem; color:var(--text-light); margin-top:0.3rem;">Winner pick: ${entry.bonus.winner}${entry.bonus.score ? ' &bull; Score: ' + entry.bonus.score : ''}</div>` : ''}
+        <div style="background:var(--white); border-radius:10px; padding:0.65rem; margin-bottom:0.6rem; box-shadow:var(--shadow);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem; border-bottom:2px solid var(--cream); padding-bottom:0.3rem;">
+            <span style="font-weight:700; font-size:0.75rem; color:var(--pga-dark);">${entry.name}</span>
+            <span style="font-weight:700; font-size:0.72rem; color:var(--gold);">Raw: ${displayTotal}</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; padding:0.15rem 0; font-size:0.55rem; color:var(--text-light); font-weight:600; text-transform:uppercase; letter-spacing:0.05em; border-bottom:1px solid var(--cream);">
+            <span style="flex:2;">Golfer</span>
+            <span style="width:2rem; text-align:center;">Tier</span>
+            <span style="width:2.2rem; text-align:center;">Finish</span>
+            <span style="width:2.5rem; text-align:right;">${ptsLabel}</span>
+            ${isNew ? '<span style="width:2.5rem; text-align:right;">Wtd</span>' : ''}
+          </div>
+          ${scoredPicks.map(p => {
+            const isCounting = p.counting === true;
+            const rowBg = isCounting ? 'background:rgba(183,151,90,0.08);' : '';
+            const nameWeight = isCounting ? 'font-weight:700;' : 'font-weight:400;';
+            const ptsColor = isCounting ? 'color:var(--gold); font-weight:700;' : 'color:var(--text-light);';
+            const countDot = isCounting ? '<span style="color:var(--gold); margin-right:0.2rem;">&#9679;</span>' : '<span style="margin-right:0.2rem; width:0.5rem; display:inline-block;"></span>';
+            const ptsVal = p.pts !== null ? p.pts : '—';
+            const wtdVal = (isNew && p.weighted !== null && p.weighted !== undefined) ? p.weighted : '';
+            return `
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:0.22rem 0; font-size:0.66rem; border-bottom:1px solid var(--cream-dark); ${rowBg}">
+              <span style="flex:2; ${nameWeight} display:flex; align-items:center;">${countDot}${p.name}</span>
+              <span style="width:2rem; text-align:center; font-size:0.58rem; color:var(--text-light);">${p.label}</span>
+              <span style="width:2.2rem; text-align:center; font-size:0.62rem; font-weight:600;">${p.posDisplay}</span>
+              <span style="width:2.5rem; text-align:right; font-size:0.62rem; ${ptsColor}">${ptsVal}</span>
+              ${isNew ? `<span style="width:2.5rem; text-align:right; font-size:0.62rem; ${isCounting ? 'color:var(--gold); font-weight:700;' : 'color:var(--text-light);'}">${wtdVal}</span>` : ''}
+            </div>`;
+          }).join('')}
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:0.35rem 0 0.1rem; margin-top:0.15rem; border-top:2px solid var(--pga-dark);">
+            <span style="font-size:0.6rem; font-weight:600; color:var(--pga-dark);">Counting ${countingSlots} of ${picks.length}</span>
+            <span style="font-size:0.7rem; font-weight:800; color:var(--pga-dark);">Total: ${displayTotal}${isNew ? ' pts' : ''}</span>
+          </div>
+          ${entry.bonus?.winner ? `<div style="font-size:0.58rem; color:var(--text-light); margin-top:0.3rem; padding-top:0.25rem; border-top:1px dashed var(--cream-dark);">Winner pick: ${entry.bonus.winner}${entry.bonus.score ? ' &bull; Predicted score: ' + entry.bonus.score : ''}${entry.bonus.leaderHolds ? ' &bull; Leader holds: ' + entry.bonus.leaderHolds : ''}</div>` : ''}
         </div>`;
     });
 
-    container.innerHTML = html;
+    container.innerHTML = hasESPN
+      ? html
+      : '<p style="font-size:0.6rem; color:var(--text-light); text-align:center; margin-bottom:0.5rem;">Tournament scoring data not available — showing picks only.</p>' + html;
     container.dataset.loaded = 'true';
     btn.textContent = 'Hide Picks';
     btn.disabled = false;
