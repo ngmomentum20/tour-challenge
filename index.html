@@ -2134,13 +2134,34 @@ async function loadHistoryPicks(eventId, btn) {
   btn.disabled = true;
 
   try {
-    // Fetch picks AND ESPN data in parallel
-    const [picksResp, espnData] = await Promise.all([
-      fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${eventId}`).then(r => r.json()),
-      fetchESPNLeaderboard().catch(() => null)
-    ]);
+    const evDef = SEASON_EVENTS.find(e => e.id === eventId);
+    const isQuickPick = evDef?.type === 'SIGNATURE';
+    const isNew = useNewScoring(eventId);
+    const countingSlots = isQuickPick ? 2 : 4;
 
-    if (!picksResp.entries || picksResp.entries.length === 0) {
+    // Find this event's results (includes golferDetails from sheet)
+    const eventResults = COMPLETED_EVENTS.find(ce => ce.eventId === eventId);
+    const resultsMap = {};
+    if (eventResults) {
+      eventResults.results.forEach(r => { resultsMap[r.name.toLowerCase()] = r; });
+    }
+
+    // Check if we have stored golfer details in the results
+    const hasStoredDetails = eventResults && eventResults.results.some(r => r.golferDetails);
+
+    // If no stored details, fetch picks from sheet and try ESPN as fallback
+    let picksResp = null;
+    let espnData = null;
+    if (!hasStoredDetails) {
+      [picksResp, espnData] = await Promise.all([
+        fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${eventId}`).then(r => r.json()),
+        fetchESPNLeaderboard().catch(() => null)
+      ]);
+    } else {
+      picksResp = await fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${eventId}`).then(r => r.json());
+    }
+
+    if (!picksResp || !picksResp.entries || picksResp.entries.length === 0) {
       container.innerHTML = '<p style="font-size:0.7rem; color:var(--text-light); text-align:center;">No pick data available for this event.</p>';
       container.dataset.loaded = 'true';
       btn.textContent = 'Hide Picks';
@@ -2148,22 +2169,11 @@ async function loadHistoryPicks(eventId, btn) {
       return;
     }
 
-    const evDef = SEASON_EVENTS.find(e => e.id === eventId);
-    const isQuickPick = evDef?.type === 'SIGNATURE';
-    const isNew = useNewScoring(eventId);
-    const countingSlots = isQuickPick ? 2 : 4;
     const hasESPN = espnData && espnData.competitors && espnData.competitors.length > 0;
-
-    // Find this event's results for raw score lookup
-    const eventResults = COMPLETED_EVENTS.find(ce => ce.eventId === eventId);
-    const resultsMap = {};
-    if (eventResults) {
-      eventResults.results.forEach(r => { resultsMap[r.name.toLowerCase()] = r; });
-    }
 
     let html = '';
     picksResp.entries.forEach(entry => {
-      // Extract all picks
+      // Extract all picks with tier labels
       let picks;
       if (isQuickPick || entry.format === 'quick') {
         picks = [
@@ -2186,37 +2196,57 @@ async function loadHistoryPicks(eventId, btn) {
         ];
       }
 
-      // Score each golfer if ESPN data available
-      let scoredPicks = picks.map(p => {
-        const g = hasESPN ? findGolferInESPN(p.name, espnData) : null;
-        let pts = null, pos = null, posDisplay = '—', weighted = null;
-        if (g) {
-          posDisplay = g.posDisplay || '—';
-          pos = g.position;
-          if (isNew) {
-            pts = (g.status === 'MC' || g.status === 'WD') ? 0 : getFantasyPoints(g.position);
-          } else {
-            if (g.status === 'MC') pts = MC_POINTS;
-            else if (g.status === 'WD') pts = WD_POINTS;
-            else pts = getPositionPoints(g.position);
-          }
-        }
-        return { ...p, pts, pos, posDisplay, weighted };
-      });
+      // Try to get stored golfer details from Results sheet
+      const savedResult = resultsMap[entry.name.toLowerCase()];
+      let storedGolfers = null;
+      if (savedResult && savedResult.golferDetails) {
+        try {
+          storedGolfers = typeof savedResult.golferDetails === 'string'
+            ? JSON.parse(savedResult.golferDetails)
+            : savedResult.golferDetails;
+        } catch (e) { storedGolfers = null; }
+      }
 
-      // Determine counting picks
-      if (hasESPN && scoredPicks.some(p => p.pts !== null)) {
+      // Build scored picks — prefer stored data, fall back to ESPN, then show without scores
+      let scoredPicks;
+      if (storedGolfers && storedGolfers.length > 0) {
+        // Use stored scoring data (permanent, reliable)
+        scoredPicks = picks.map(p => {
+          const stored = storedGolfers.find(g => g.name === p.name);
+          if (stored) {
+            return {
+              ...p,
+              pts: stored.pts,
+              posDisplay: stored.posDisplay || '—',
+              counting: stored.counting || false,
+              weighted: stored.weighted || null
+            };
+          }
+          return { ...p, pts: null, posDisplay: '—', counting: false, weighted: null };
+        });
+      } else if (hasESPN) {
+        // Fall back to live ESPN data
+        scoredPicks = picks.map(p => {
+          const g = findGolferInESPN(p.name, espnData);
+          let pts = null, posDisplay = '—', weighted = null;
+          if (g) {
+            posDisplay = g.posDisplay || '—';
+            if (isNew) {
+              pts = (g.status === 'MC' || g.status === 'WD') ? 0 : getFantasyPoints(g.position);
+            } else {
+              if (g.status === 'MC') pts = MC_POINTS;
+              else if (g.status === 'WD') pts = WD_POINTS;
+              else pts = getPositionPoints(g.position);
+            }
+          }
+          return { ...p, pts, posDisplay, counting: false, weighted: null };
+        });
+        // Calculate counting picks from ESPN
         const sorted = [...scoredPicks].filter(p => p.pts !== null);
-        if (isNew) {
-          sorted.sort((a, b) => b.pts - a.pts); // highest first
-        } else {
-          sorted.sort((a, b) => a.pts - b.pts); // lowest first
-        }
+        if (isNew) sorted.sort((a, b) => b.pts - a.pts);
+        else sorted.sort((a, b) => a.pts - b.pts);
         const countingNames = new Set(sorted.slice(0, countingSlots).map(p => p.name));
         const weights = isNew ? (isQuickPick ? SIGNATURE_WEIGHTS : MAJOR_WEIGHTS) : null;
-
-        // Assign counting status and weights
-        let weightIdx = 0;
         const sortedCounting = sorted.filter(p => countingNames.has(p.name)).slice(0, countingSlots);
         scoredPicks.forEach(p => {
           p.counting = countingNames.has(p.name);
@@ -2225,22 +2255,25 @@ async function loadHistoryPicks(eventId, btn) {
             p.weighted = Math.round(p.pts * (weights[rank] || 1.0) * 10) / 10;
           }
         });
+      } else {
+        // No scoring data available
+        scoredPicks = picks.map(p => ({ ...p, pts: null, posDisplay: '—', counting: false, weighted: null }));
       }
 
-      // Calculate total from counting picks
-      let total = null;
-      if (hasESPN && scoredPicks.some(p => p.pts !== null)) {
+      const hasScoring = scoredPicks.some(p => p.pts !== null);
+
+      // Calculate display total
+      let displayTotal;
+      if (hasScoring) {
         if (isNew) {
-          total = scoredPicks.filter(p => p.counting).reduce((sum, p) => sum + (p.weighted || 0), 0);
-          total = Math.round(total * 10) / 10;
+          displayTotal = scoredPicks.filter(p => p.counting).reduce((sum, p) => sum + (p.weighted || 0), 0);
+          displayTotal = Math.round(displayTotal * 10) / 10;
         } else {
-          total = scoredPicks.filter(p => p.counting).reduce((sum, p) => sum + (p.pts || 0), 0);
+          displayTotal = scoredPicks.filter(p => p.counting).reduce((sum, p) => sum + (p.pts || 0), 0);
         }
+      } else {
+        displayTotal = savedResult ? savedResult.rawScore : '—';
       }
-
-      // Fallback: get raw score from saved results
-      const savedResult = resultsMap[entry.name.toLowerCase()];
-      const displayTotal = total !== null ? total : (savedResult ? savedResult.rawScore : '—');
 
       // Build the card
       const ptsLabel = isNew ? 'Fantasy Pts' : 'Pos Pts';
@@ -2282,9 +2315,7 @@ async function loadHistoryPicks(eventId, btn) {
         </div>`;
     });
 
-    container.innerHTML = hasESPN
-      ? html
-      : '<p style="font-size:0.6rem; color:var(--text-light); text-align:center; margin-bottom:0.5rem;">Tournament scoring data not available — showing picks only.</p>' + html;
+    container.innerHTML = html;
     container.dataset.loaded = 'true';
     btn.textContent = 'Hide Picks';
     btn.disabled = false;
@@ -3227,37 +3258,41 @@ function scoreEvent(picksEntries, espnData, eventType, eventId) {
       ].filter(Boolean);
     }
 
+    // Build detailed golfer scoring
+    const golferDetails = allPicks.map(name => {
+      const espn = findGolferInESPN(name, espnData);
+      if (!espn) return { name, pos: 999, posDisplay: 'N/A', status: 'unknown', pts: isNew ? 0 : WD_POINTS };
+      if (espn.status === 'MC') return { name, pos: 999, posDisplay: 'MC', status: 'MC', pts: isNew ? 0 : MC_POINTS };
+      if (espn.status === 'WD') return { name, pos: 999, posDisplay: 'WD', status: 'WD', pts: isNew ? 0 : WD_POINTS };
+      const pts = isNew ? getFantasyPoints(espn.position) : getPositionPoints(espn.position);
+      return { name, pos: espn.position, posDisplay: espn.posDisplay, status: 'active', pts };
+    });
+
     if (isNew) {
       // NEW SCORING: Fantasy points (higher = better) with weight multipliers
-      const golferScores = allPicks.map(name => {
-        const espn = findGolferInESPN(name, espnData);
-        if (!espn) return 0;
-        if (espn.status === 'MC' || espn.status === 'WD') return 0;
-        return getFantasyPoints(espn.position);
-      });
-
-      // Sort descending (highest fantasy points first)
-      golferScores.sort((a, b) => b - a);
+      const sorted = [...golferDetails].sort((a, b) => b.pts - a.pts);
       const weights = isQuickPick ? SIGNATURE_WEIGHTS : MAJOR_WEIGHTS;
+      const countingNames = new Set(sorted.slice(0, countingSlots).map(g => g.name));
       let rawScore = 0;
-      for (let i = 0; i < countingSlots && i < golferScores.length; i++) {
-        rawScore += golferScores[i] * (weights[i] || 1.0);
-      }
-      rawScore = Math.round(rawScore * 10) / 10; // 1 decimal
-      return { name: entry.name, rawScore };
+      const sortedCounting = sorted.filter(g => countingNames.has(g.name)).slice(0, countingSlots);
+      golferDetails.forEach(g => {
+        g.counting = countingNames.has(g.name);
+        if (g.counting) {
+          const rank = sortedCounting.findIndex(s => s.name === g.name);
+          g.weight = weights[rank] || 1.0;
+          g.weighted = Math.round(g.pts * g.weight * 10) / 10;
+        }
+      });
+      rawScore = sortedCounting.reduce((sum, g, i) => sum + g.pts * (weights[i] || 1.0), 0);
+      rawScore = Math.round(rawScore * 10) / 10;
+      return { name: entry.name, rawScore, golferDetails };
     } else {
       // OLD SCORING: Position points (lower = better), straight sum
-      const golferScores = allPicks.map(name => {
-        const espn = findGolferInESPN(name, espnData);
-        if (!espn) return WD_POINTS;
-        if (espn.status === 'MC') return MC_POINTS;
-        if (espn.status === 'WD') return WD_POINTS;
-        return getPositionPoints(espn.position);
-      });
-
-      golferScores.sort((a, b) => a - b);
-      const rawScore = golferScores.slice(0, countingSlots).reduce((sum, pts) => sum + pts, 0);
-      return { name: entry.name, rawScore };
+      const sorted = [...golferDetails].sort((a, b) => a.pts - b.pts);
+      const countingNames = new Set(sorted.slice(0, countingSlots).map(g => g.name));
+      golferDetails.forEach(g => { g.counting = countingNames.has(g.name); });
+      const rawScore = sorted.slice(0, countingSlots).reduce((sum, g) => sum + g.pts, 0);
+      return { name: entry.name, rawScore, golferDetails };
     }
   });
 
@@ -3283,13 +3318,20 @@ function scoreEvent(picksEntries, espnData, eventType, eventId) {
 // POST results to Google Sheet via Apps Script
 async function saveResultsToSheet(eventId, results) {
   try {
+    // Include golfer details as JSON for history scoring breakdown
+    const resultsWithDetails = results.map(r => ({
+      name: r.name,
+      rawScore: r.rawScore,
+      poolFinish: r.poolFinish,
+      golferDetails: r.golferDetails ? JSON.stringify(r.golferDetails) : ''
+    }));
     const resp = await fetch(APPS_SCRIPT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify({
         action: 'saveResults',
         eventId: eventId,
-        results: results
+        results: resultsWithDetails
       })
     });
     const data = await resp.json();
