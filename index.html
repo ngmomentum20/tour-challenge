@@ -2149,17 +2149,8 @@ async function loadHistoryPicks(eventId, btn) {
     // Check if we have stored golfer details in the results
     const hasStoredDetails = eventResults && eventResults.results.some(r => r.golferDetails);
 
-    // If no stored details, fetch picks from sheet and try ESPN as fallback
-    let picksResp = null;
-    let espnData = null;
-    if (!hasStoredDetails) {
-      [picksResp, espnData] = await Promise.all([
-        fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${eventId}`).then(r => r.json()),
-        fetchESPNLeaderboard().catch(() => null)
-      ]);
-    } else {
-      picksResp = await fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${eventId}`).then(r => r.json());
-    }
+    // Fetch picks from sheet (no ESPN — ESPN shows the CURRENT tournament, not historical)
+    const picksResp = await fetch(`${APPS_SCRIPT_URL}?action=getPicks&eventId=${eventId}`).then(r => r.json());
 
     if (!picksResp || !picksResp.entries || picksResp.entries.length === 0) {
       container.innerHTML = '<p style="font-size:0.7rem; color:var(--text-light); text-align:center;">No pick data available for this event.</p>';
@@ -2168,8 +2159,6 @@ async function loadHistoryPicks(eventId, btn) {
       btn.disabled = false;
       return;
     }
-
-    const hasESPN = espnData && espnData.competitors && espnData.competitors.length > 0;
 
     let html = '';
     picksResp.entries.forEach(entry => {
@@ -2207,7 +2196,7 @@ async function loadHistoryPicks(eventId, btn) {
         } catch (e) { storedGolfers = null; }
       }
 
-      // Build scored picks — prefer stored data, fall back to ESPN, then show without scores
+      // Build scored picks from stored data only (ESPN shows wrong tournament for history)
       let scoredPicks;
       if (storedGolfers && storedGolfers.length > 0) {
         // Use stored scoring data (permanent, reliable)
@@ -2224,39 +2213,8 @@ async function loadHistoryPicks(eventId, btn) {
           }
           return { ...p, pts: null, posDisplay: '—', counting: false, weighted: null };
         });
-      } else if (hasESPN) {
-        // Fall back to live ESPN data
-        scoredPicks = picks.map(p => {
-          const g = findGolferInESPN(p.name, espnData);
-          let pts = null, posDisplay = '—', weighted = null;
-          if (g) {
-            posDisplay = g.posDisplay || '—';
-            if (isNew) {
-              pts = (g.status === 'MC' || g.status === 'WD') ? 0 : getFantasyPoints(g.position);
-            } else {
-              if (g.status === 'MC') pts = MC_POINTS;
-              else if (g.status === 'WD') pts = WD_POINTS;
-              else pts = getPositionPoints(g.position);
-            }
-          }
-          return { ...p, pts, posDisplay, counting: false, weighted: null };
-        });
-        // Calculate counting picks from ESPN
-        const sorted = [...scoredPicks].filter(p => p.pts !== null);
-        if (isNew) sorted.sort((a, b) => b.pts - a.pts);
-        else sorted.sort((a, b) => a.pts - b.pts);
-        const countingNames = new Set(sorted.slice(0, countingSlots).map(p => p.name));
-        const weights = isNew ? (isQuickPick ? SIGNATURE_WEIGHTS : MAJOR_WEIGHTS) : null;
-        const sortedCounting = sorted.filter(p => countingNames.has(p.name)).slice(0, countingSlots);
-        scoredPicks.forEach(p => {
-          p.counting = countingNames.has(p.name);
-          if (p.counting && weights) {
-            const rank = sortedCounting.findIndex(s => s.name === p.name);
-            p.weighted = Math.round(p.pts * (weights[rank] || 1.0) * 10) / 10;
-          }
-        });
       } else {
-        // No scoring data available
+        // No stored scoring data — show picks without scores
         scoredPicks = picks.map(p => ({ ...p, pts: null, posDisplay: '—', counting: false, weighted: null }));
       }
 
@@ -2275,9 +2233,12 @@ async function loadHistoryPicks(eventId, btn) {
         displayTotal = savedResult ? savedResult.rawScore : '—';
       }
 
-      // Build the card
+      // Build the card — two layouts: full scoring breakdown vs picks-only
       const ptsLabel = isNew ? 'Fantasy Pts' : 'Pos Pts';
-      html += `
+
+      if (hasScoring) {
+        // FULL SCORING CARD — shows finish, points, counting, weights
+        html += `
         <div style="background:var(--white); border-radius:10px; padding:0.65rem; margin-bottom:0.6rem; box-shadow:var(--shadow);">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem; border-bottom:2px solid var(--cream); padding-bottom:0.3rem;">
             <span style="font-weight:700; font-size:0.75rem; color:var(--pga-dark);">${entry.name}</span>
@@ -2313,9 +2274,29 @@ async function loadHistoryPicks(eventId, btn) {
           </div>
           ${entry.bonus?.winner ? `<div style="font-size:0.58rem; color:var(--text-light); margin-top:0.3rem; padding-top:0.25rem; border-top:1px dashed var(--cream-dark);">Winner pick: ${entry.bonus.winner}${entry.bonus.score ? ' &bull; Predicted score: ' + entry.bonus.score : ''}${entry.bonus.leaderHolds ? ' &bull; Leader holds: ' + entry.bonus.leaderHolds : ''}</div>` : ''}
         </div>`;
+      } else {
+        // PICKS-ONLY CARD — no scoring data available, clean simple list
+        html += `
+        <div style="background:var(--white); border-radius:10px; padding:0.65rem; margin-bottom:0.6rem; box-shadow:var(--shadow);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem; border-bottom:2px solid var(--cream); padding-bottom:0.3rem;">
+            <span style="font-weight:700; font-size:0.75rem; color:var(--pga-dark);">${entry.name}</span>
+            <span style="font-weight:700; font-size:0.72rem; color:var(--gold);">Raw: ${displayTotal}</span>
+          </div>
+          ${picks.map(p => `
+            <div style="display:flex; justify-content:space-between; padding:0.22rem 0; font-size:0.66rem; border-bottom:1px solid var(--cream);">
+              <span>${p.name}</span>
+              <span style="color:var(--text-light); font-size:0.6rem;">${p.label}</span>
+            </div>
+          `).join('')}
+          ${entry.bonus?.winner ? `<div style="font-size:0.58rem; color:var(--text-light); margin-top:0.3rem; padding-top:0.25rem; border-top:1px dashed var(--cream-dark);">Winner pick: ${entry.bonus.winner}${entry.bonus.score ? ' &bull; Predicted score: ' + entry.bonus.score : ''}${entry.bonus.leaderHolds ? ' &bull; Leader holds: ' + entry.bonus.leaderHolds : ''}</div>` : ''}
+        </div>`;
+      }
     });
 
-    container.innerHTML = html;
+    const noScoreMsg = !hasStoredDetails
+      ? '<p style="font-size:0.6rem; color:var(--text-light); text-align:center; margin-bottom:0.5rem; font-style:italic;">Detailed scoring breakdown not available for this event. Future events will include full scoring history.</p>'
+      : '';
+    container.innerHTML = noScoreMsg + html;
     container.dataset.loaded = 'true';
     btn.textContent = 'Hide Picks';
     btn.disabled = false;
