@@ -1189,7 +1189,7 @@ svg.inline-icon.icon-dark { stroke: var(--pga-dark); }
       <div class="rules-section">
         <h3>Event Types & Multipliers</h3>
         <p><strong>Signature Events (1x)</strong> — Quick Pick format. Choose 3 golfers from the field. Your best 2 of 3 finishing positions count toward your score.</p>
-        <p><strong>Majors (3x)</strong> — Full Draft format. Pick 8 golfers across 5 tiers (1 + 2 + 2 + 2 + 1). Your best 4 of 8 count. Tiebreakers: closest to winning score, correct playoff prediction, correct Saturday leader.</p>
+        <p><strong>Majors (3x)</strong> — Full Draft format. Pick 8 golfers across 5 tiers. Through The Open: 1+2+2+2+1. Starting FedEx St. Jude: 3+2+1+1+1 (3 favorites, more engagement at the top). Your best 4 of 8 count. All golfers in the tournament field are available. Tiebreakers: closest to winning score, correct playoff prediction, correct Saturday leader.</p>
         <p><strong>FedEx Cup Playoffs (2x)</strong> — Same Full Draft format as Majors.</p>
       </div>
 
@@ -1684,14 +1684,60 @@ async function fetchESPNField() {
   }
 }
 
-// On picks render, try ESPN first, fall back to hardcoded EVENT_FIELDS
+// ============================================================
+// TIER CONFIGURATION — Event 13+ uses 3+2+1+1+1 = 8 picks
+// ============================================================
+const NEW_TIER_START = 13; // First event using new tier structure
+const NEW_TIER_PICKS = [3, 2, 1, 1, 1]; // picks per tier
+const OLD_TIER_PICKS = [1, 2, 2, 2, 1]; // picks per tier
+const TIER_NAMES = ['Tier 1 — Favorites', 'Tier 2 — Contenders', 'Tier 3 — Mid-Range', 'Tier 4 — Dark Horses', 'Tier 5 — Longshots'];
+// Tier split thresholds: how many golfers from a sorted field go into each tier
+const TIER_SPLITS = [15, 20, 30, 35]; // T1=top 15, T2=next 20, T3=next 30, T4=next 35, T5=rest
+
+function getTierPicks(eventId) {
+  return eventId >= NEW_TIER_START ? NEW_TIER_PICKS : OLD_TIER_PICKS;
+}
+
+// Auto-generate 5-tier field from a flat golfer list (sorted by world ranking)
+function autoGenerateTiers(golfers, eventId) {
+  const tierPicks = getTierPicks(eventId);
+  const total = golfers.length;
+  let idx = 0;
+  const tiers = [];
+  TIER_SPLITS.forEach((size, i) => {
+    const end = Math.min(idx + size, total);
+    tiers.push({
+      tier: i + 1,
+      name: TIER_NAMES[i],
+      picks: tierPicks[i],
+      players: golfers.slice(idx, end).map(g => ({ name: g.name, odds: 'Rank ' + g.rank }))
+    });
+    idx = end;
+  });
+  // Tier 5: everything remaining
+  tiers.push({
+    tier: 5,
+    name: TIER_NAMES[4],
+    picks: tierPicks[4],
+    players: golfers.slice(idx).map(g => ({ name: g.name, odds: 'Rank ' + g.rank }))
+  });
+  return { format: 'full', tiers };
+}
+
+// On picks render: hardcoded → ESPN auto-tiers → null
 async function getFieldForEvent(eventId) {
   // Check hardcoded first (instant, reliable)
   if (EVENT_FIELDS[eventId]) return EVENT_FIELDS[eventId];
 
-  // Try ESPN API
+  // Try ESPN API — auto-generate tiers for Majors/Playoffs, flat list for Signatures
+  const evDef = SEASON_EVENTS.find(e => e.id === eventId);
+  const isFullDraft = evDef && evDef.type !== 'SIGNATURE';
   const espnField = await fetchESPNField();
+
   if (espnField && espnField.golfers.length > 0) {
+    if (isFullDraft) {
+      return autoGenerateTiers(espnField.golfers, eventId);
+    }
     return { format: 'quick', golfers: espnField.golfers };
   }
 
@@ -1734,9 +1780,14 @@ function updateTierCards(tierNum, maxPicks) {
 function updateFullDraftSubmitState() {
   const btn = document.getElementById('submitPicks');
   if (!btn) return;
-  // All tiers must be fully filled: 1+2+2+2+1 = 8
-  const total = Object.values(tierSelections).reduce((sum, arr) => sum + arr.length, 0);
-  btn.disabled = total < 8;
+  // Check each tier is fully filled according to its pick count
+  const evDef = getActiveEventDef();
+  const tierPicks = evDef ? getTierPicks(evDef.id) : OLD_TIER_PICKS;
+  let allFilled = true;
+  for (let t = 0; t < 5; t++) {
+    if (tierSelections[t + 1].length < tierPicks[t]) { allFilled = false; break; }
+  }
+  btn.disabled = !allFilled;
 }
 
 function toggleQuickPick(name) {
@@ -2683,17 +2734,23 @@ async function loadMyPicks() {
             picksHTML += `<div style="padding:0.3rem 0; font-size:0.72rem; border-bottom:1px solid var(--cream); display:flex; justify-content:space-between;"><span>${p}</span><span style="color:var(--text-light);">Pick ${i+1}</span></div>`;
           });
         } else {
-          const tiers = [
-            { label: 'Tier 1', picks: [entry.tier1].filter(Boolean) },
-            { label: 'Tier 2', picks: [entry.tier2a, entry.tier2b].filter(Boolean) },
-            { label: 'Tier 3', picks: [entry.tier3a, entry.tier3b].filter(Boolean) },
-            { label: 'Tier 4', picks: [entry.tier4a, entry.tier4b].filter(Boolean) },
-            { label: 'Tier 5', picks: [entry.tier5].filter(Boolean) }
-          ];
-          tiers.forEach(t => {
-            t.picks.forEach(p => {
-              picksHTML += `<div style="padding:0.3rem 0; font-size:0.72rem; border-bottom:1px solid var(--cream); display:flex; justify-content:space-between;"><span>${p}</span><span style="color:var(--text-light);">${t.label}</span></div>`;
-            });
+          // Build tier display from flat picks — try new format (pick1-pick8), fall back to old (tier1, tier2a...)
+          const flatPicks = [];
+          if (entry.pick1) {
+            for (let p = 1; p <= 8; p++) {
+              const val = entry['pick' + p];
+              if (val) flatPicks.push(val);
+            }
+          } else {
+            // Old server format fallback
+            [entry.tier1, entry.tier2a, entry.tier2b, entry.tier3a, entry.tier3b, entry.tier4a, entry.tier4b, entry.tier5].forEach(v => { if (v) flatPicks.push(v); });
+          }
+          const tierPicks = getTierPicks(ACTIVE_EVENT.eventId);
+          let pickIdx = 0;
+          tierPicks.forEach((count, tierIdx) => {
+            for (let c = 0; c < count && pickIdx < flatPicks.length; c++, pickIdx++) {
+              picksHTML += `<div style="padding:0.3rem 0; font-size:0.72rem; border-bottom:1px solid var(--cream); display:flex; justify-content:space-between;"><span>${flatPicks[pickIdx]}</span><span style="color:var(--text-light);">Tier ${tierIdx+1}</span></div>`;
+            }
           });
         }
 
@@ -2720,35 +2777,35 @@ async function loadMyPicks() {
         updatePickCards();
       }
 
-      // Populate Full Draft — tier cards or text inputs
+      // Populate Full Draft — map flat picks back to tier selections
       const hasTierCardUI = document.querySelector('.player-card[data-tier]');
-      if (hasTierCardUI) {
-        // Populate tier card selections
+      if (hasTierCardUI && entry.format !== 'quick') {
+        // Build flat picks — try new format (pick1-pick8), fall back to old (tier1, tier2a...)
+        const flatPicks = [];
+        if (entry.pick1) {
+          for (let p = 1; p <= 8; p++) {
+            const val = entry['pick' + p];
+            if (val) flatPicks.push(val);
+          }
+        } else {
+          [entry.tier1, entry.tier2a, entry.tier2b, entry.tier3a, entry.tier3b, entry.tier4a, entry.tier4b, entry.tier5].forEach(v => { if (v) flatPicks.push(v); });
+        }
+        // Map flat picks back to tier selections using the event's tier config
+        const tierPicks = getTierPicks(ACTIVE_EVENT.eventId);
         tierSelections = { 1: [], 2: [], 3: [], 4: [], 5: [] };
-        if (entry.tier1) tierSelections[1].push(entry.tier1);
-        if (entry.tier2a) tierSelections[2].push(entry.tier2a);
-        if (entry.tier2b) tierSelections[2].push(entry.tier2b);
-        if (entry.tier3a) tierSelections[3].push(entry.tier3a);
-        if (entry.tier3b) tierSelections[3].push(entry.tier3b);
-        if (entry.tier4a) tierSelections[4].push(entry.tier4a);
-        if (entry.tier4b) tierSelections[4].push(entry.tier4b);
-        if (entry.tier5) tierSelections[5].push(entry.tier5);
+        let pickIdx = 0;
+        tierPicks.forEach((count, tierIdx) => {
+          for (let c = 0; c < count && pickIdx < flatPicks.length; c++, pickIdx++) {
+            tierSelections[tierIdx + 1].push(flatPicks[pickIdx]);
+          }
+        });
         // Re-render all tier card states
         const evField = EVENT_FIELDS[ACTIVE_EVENT.eventId];
+        const fieldTiers = evField?.tiers || document.querySelectorAll('[data-tier-picks]');
         if (evField && evField.tiers) {
           evField.tiers.forEach(t => updateTierCards(t.tier, t.picks));
         }
         updateFullDraftSubmitState();
-      } else {
-        // Fallback text inputs
-        if (entry.tier1) document.getElementById('tier1') && (document.getElementById('tier1').value = entry.tier1);
-        if (entry.tier2a) document.getElementById('tier2a') && (document.getElementById('tier2a').value = entry.tier2a);
-        if (entry.tier2b) document.getElementById('tier2b') && (document.getElementById('tier2b').value = entry.tier2b);
-        if (entry.tier3a) document.getElementById('tier3a') && (document.getElementById('tier3a').value = entry.tier3a);
-        if (entry.tier3b) document.getElementById('tier3b') && (document.getElementById('tier3b').value = entry.tier3b);
-        if (entry.tier4a) document.getElementById('tier4a') && (document.getElementById('tier4a').value = entry.tier4a);
-        if (entry.tier4b) document.getElementById('tier4b') && (document.getElementById('tier4b').value = entry.tier4b);
-        if (entry.tier5) document.getElementById('tier5') && (document.getElementById('tier5').value = entry.tier5);
       }
       if (entry.tbScore) document.getElementById('tbScore') && (document.getElementById('tbScore').value = entry.tbScore);
       if (entry.tbPlayoff) document.getElementById('tbPlayoff') && (document.getElementById('tbPlayoff').value = entry.tbPlayoff);
@@ -2806,10 +2863,13 @@ async function submitPicks() {
   if (!isQuickPick) {
     const hasTierCards = Object.values(tierSelections).some(arr => arr.length > 0);
     if (hasTierCards) {
-      const total = Object.values(tierSelections).reduce((sum, arr) => sum + arr.length, 0);
-      if (total < 8) {
-        msgEl.innerHTML = '<div class="picks-msg error">Please fill all 8 tier picks (1+2+2+2+1) before submitting.</div>';
-        return;
+      const tierPicks = getTierPicks(evDef.id);
+      for (let t = 0; t < 5; t++) {
+        if (tierSelections[t + 1].length < tierPicks[t]) {
+          const label = tierPicks.join('+') + ' = ' + tierPicks.reduce((a, b) => a + b, 0);
+          msgEl.innerHTML = `<div class="picks-msg error">Please fill all tier picks (${label}) before submitting.</div>`;
+          return;
+        }
       }
     }
   }
@@ -2834,26 +2894,27 @@ async function submitPicks() {
       payload.qp3 = document.getElementById('qp3')?.value?.trim() || '';
     }
   } else {
-    // Read from tier card selections first, fall back to text inputs
+    // Flatten all tier selections into ordered pick slots (pick1-pick8)
     const hasTierCards = Object.values(tierSelections).some(arr => arr.length > 0);
     if (hasTierCards) {
-      payload.tier1 = tierSelections[1][0] || '';
-      payload.tier2a = tierSelections[2][0] || '';
-      payload.tier2b = tierSelections[2][1] || '';
-      payload.tier3a = tierSelections[3][0] || '';
-      payload.tier3b = tierSelections[3][1] || '';
-      payload.tier4a = tierSelections[4][0] || '';
-      payload.tier4b = tierSelections[4][1] || '';
-      payload.tier5 = tierSelections[5][0] || '';
+      const flatPicks = [];
+      for (let t = 1; t <= 5; t++) {
+        tierSelections[t].forEach(name => flatPicks.push(name));
+      }
+      while (flatPicks.length < 8) flatPicks.push('');
+      for (let i = 0; i < 8; i++) {
+        payload['pick' + (i + 1)] = flatPicks[i];
+      }
     } else {
-      payload.tier1 = document.getElementById('tier1')?.value?.trim() || '';
-      payload.tier2a = document.getElementById('tier2a')?.value?.trim() || '';
-      payload.tier2b = document.getElementById('tier2b')?.value?.trim() || '';
-      payload.tier3a = document.getElementById('tier3a')?.value?.trim() || '';
-      payload.tier3b = document.getElementById('tier3b')?.value?.trim() || '';
-      payload.tier4a = document.getElementById('tier4a')?.value?.trim() || '';
-      payload.tier4b = document.getElementById('tier4b')?.value?.trim() || '';
-      payload.tier5 = document.getElementById('tier5')?.value?.trim() || '';
+      // Legacy text input fallback
+      payload.pick1 = document.getElementById('tier1')?.value?.trim() || '';
+      payload.pick2 = document.getElementById('tier2a')?.value?.trim() || '';
+      payload.pick3 = document.getElementById('tier2b')?.value?.trim() || '';
+      payload.pick4 = document.getElementById('tier3a')?.value?.trim() || '';
+      payload.pick5 = document.getElementById('tier3b')?.value?.trim() || '';
+      payload.pick6 = document.getElementById('tier4a')?.value?.trim() || '';
+      payload.pick7 = document.getElementById('tier4b')?.value?.trim() || '';
+      payload.pick8 = document.getElementById('tier5')?.value?.trim() || '';
     }
     payload.tbScore = document.getElementById('tbScore')?.value?.trim() || '';
     payload.tbPlayoff = document.getElementById('tbPlayoff')?.value || '';
