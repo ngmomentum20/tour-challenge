@@ -1762,6 +1762,72 @@ const FEDEX_CUP_RANKINGS = {
 // How many FedEx Cup players qualify for each playoff event
 const PLAYOFF_FIELD_SIZE = { 13: 70, 14: 50, 15: 30 };
 
+// ---- Live FedEx Cup standings -------------------------------------------
+// The table above is a static snapshot and goes stale after every playoff
+// event. We fetch the live standings from pgatour.com (which serves its page
+// data as embedded JSON and allows cross-origin reads) and fall back to the
+// snapshot if that ever fails, so the app degrades rather than breaks.
+const FEDEX_CACHE_KEY = 'tc_fedex_standings_v1';
+const FEDEX_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
+let FEDEX_LIVE = null;          // in-memory cache for this page load
+let FEDEX_SOURCE = 'snapshot';  // 'live' | 'cache' | 'snapshot'
+let FEDEX_ASOF = null;
+
+async function fetchFedExStandings() {
+  const resp = await fetch('https://www.pgatour.com/fedexcup');
+  const text = await resp.text();
+  const m = text.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
+  if (!m) throw new Error('standings JSON not found in page');
+  const data = JSON.parse(m[1]);
+  const list = (data && data.props && data.props.pageProps && data.props.pageProps.tourCupMetaList) || [];
+  // Pick the main FedExCup Standings cup (not "FedExCup Fall Standings")
+  const cup = list.find(c => /^fedexcup standings$/i.test((c.title || '').trim()))
+           || list.find(c => /fedexcup standings/i.test(c.title || ''))
+           || list[0];
+  const players = (cup && cup.officialPlayers) || [];
+  const table = {};
+  players.forEach(p => {
+    const name = (p.displayName || '').trim();
+    const rank = parseInt(p.officialSort, 10);
+    if (name && rank > 0) table[name] = rank;
+  });
+  // Sanity check: a real standings list has well over 30 players and a #1.
+  const count = Object.keys(table).length;
+  const hasTop = Object.keys(table).some(n => table[n] === 1);
+  if (count < 30 || !hasTop) throw new Error('standings failed sanity check (' + count + ' players)');
+  return table;
+}
+
+async function getFedExRankings() {
+  if (FEDEX_LIVE) return FEDEX_LIVE;
+
+  // Warm from cache first so the picks page renders fast
+  try {
+    const raw = localStorage.getItem(FEDEX_CACHE_KEY);
+    if (raw) {
+      const c = JSON.parse(raw);
+      if (c && c.ts && (Date.now() - c.ts) < FEDEX_CACHE_TTL &&
+          c.data && Object.keys(c.data).length >= 30) {
+        FEDEX_LIVE = c.data; FEDEX_SOURCE = 'cache'; FEDEX_ASOF = c.ts;
+        return FEDEX_LIVE;
+      }
+    }
+  } catch (e) { /* localStorage unavailable — ignore */ }
+
+  try {
+    const live = await fetchFedExStandings();
+    FEDEX_LIVE = live; FEDEX_SOURCE = 'live'; FEDEX_ASOF = Date.now();
+    try {
+      localStorage.setItem(FEDEX_CACHE_KEY, JSON.stringify({ ts: FEDEX_ASOF, data: live }));
+    } catch (e) { /* quota/private mode — fine, memory cache still applies */ }
+    return live;
+  } catch (e) {
+    console.log('Live FedEx Cup standings unavailable, using built-in snapshot:', e.message);
+    FEDEX_SOURCE = 'snapshot';
+    return FEDEX_CUP_RANKINGS;
+  }
+}
+
 function normalizeName(n) {
   return (n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z]/g, '');
 }
@@ -1782,13 +1848,24 @@ function getOWGR(name) {
 // Build the playoff field directly from FedEx Cup standings (top N).
 // This is authoritative — ESPN's leaderboard API cannot be used because it
 // returns the most recent/current tournament, not the upcoming one.
-function getFedExPlayoffField(eventId) {
+async function getFedExPlayoffField(eventId) {
   const size = PLAYOFF_FIELD_SIZE[eventId];
   if (!size) return null;
-  const golfers = Object.keys(FEDEX_CUP_RANKINGS)
-    .map(name => ({ name, rank: FEDEX_CUP_RANKINGS[name], owgr: getOWGR(name) }))
+  const table = await getFedExRankings();
+  const golfers = Object.keys(table)
+    .map(name => ({ name, rank: table[name], owgr: getOWGR(name) }))
     .filter(g => g.rank <= size)
     .sort((a, b) => a.rank - b.rank);
+  // If the table somehow can't fill the field, fall back to the snapshot.
+  if (golfers.length < size && table !== FEDEX_CUP_RANKINGS) {
+    console.log('Live standings returned only ' + golfers.length + '/' + size + ' — using snapshot.');
+    FEDEX_SOURCE = 'snapshot';
+    const fb = Object.keys(FEDEX_CUP_RANKINGS)
+      .map(name => ({ name, rank: FEDEX_CUP_RANKINGS[name], owgr: getOWGR(name) }))
+      .filter(g => g.rank <= size)
+      .sort((a, b) => a.rank - b.rank);
+    return fb.length ? { eventName: 'FedEx Cup Playoffs', golfers: fb, rankLabel: 'FedEx' } : null;
+  }
   return golfers.length ? { eventName: 'FedEx Cup Playoffs', golfers, rankLabel: 'FedEx' } : null;
 }
 
@@ -1857,6 +1934,22 @@ function getTierPicks(eventId) {
   return eventId >= NEW_TIER_START ? NEW_TIER_PICKS : OLD_TIER_PICKS;
 }
 
+// Small banner telling you where the playoff field came from, so a stale
+// field is visible rather than silently wrong.
+function fedexSourceNote() {
+  const evDef = getActiveEventDef();
+  if (!evDef || evDef.type !== 'PLAYOFF') return '';
+  if (FEDEX_SOURCE === 'live' || FEDEX_SOURCE === 'cache') {
+    const when = FEDEX_ASOF ? new Date(FEDEX_ASOF).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+    return `<div style="font-size:0.6rem; color:var(--text-light); margin-bottom:0.5rem; text-align:center;">
+      Field: top ${PLAYOFF_FIELD_SIZE[evDef.id]} from live FedEx Cup standings${when ? ' &middot; updated ' + when : ''}
+    </div>`;
+  }
+  return `<div style="font-size:0.6rem; color:var(--gold-dark, #8a6d1f); background:rgba(200,169,81,0.12); border-radius:6px; padding:0.35rem 0.5rem; margin-bottom:0.5rem; text-align:center;">
+    Live FedEx Cup standings unavailable &mdash; using saved standings, which may be out of date.
+  </div>`;
+}
+
 // Auto-generate a 5-tier field from a golfer list already sorted best-first.
 // rankLabel is 'FedEx' for playoff events, 'OWGR' otherwise.
 function autoGenerateTiers(golfers, eventId, rankLabel) {
@@ -1923,7 +2016,7 @@ async function getFieldForEvent(eventId) {
   // PLAYOFF events: the field IS the FedEx Cup top N. Authoritative — do not use ESPN,
   // which returns the current/most-recent tournament rather than the upcoming one.
   if (evDef && evDef.type === 'PLAYOFF') {
-    const fedexField = getFedExPlayoffField(eventId);
+    const fedexField = await getFedExPlayoffField(eventId);
     if (fedexField) {
       return autoGenerateTiers(fedexField.golfers, eventId, 'FedEx');
     }
@@ -2776,7 +2869,7 @@ async function renderPicks() {
     // Full Draft with tiered player cards
     formHTML += `<div class="card" style="margin-bottom:0.8rem;">
       <div class="card-header" style="font-size:0.75rem;">Full Draft &mdash; 8 Golfers, 5 Tiers <span style="font-size:0.6rem; opacity:0.7;">(Best 4 of 8 count)</span></div>
-      <div class="card-body">`;
+      <div class="card-body">${fedexSourceNote()}`;
     field.tiers.forEach(tier => {
       formHTML += `
         <div class="tier-section">
