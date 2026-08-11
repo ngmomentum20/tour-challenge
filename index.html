@@ -1711,16 +1711,67 @@ const OWGR_RANKINGS = {
   'Peter Uihlein':197,'Joe Highsmith':197,'Dean Burmester':199,'Erik van Rooyen':200
 };
 
-function getOWGR(name) {
-  // Direct match first
-  if (OWGR_RANKINGS[name]) return OWGR_RANKINGS[name];
-  // Try case-insensitive / accent-insensitive fuzzy match
-  const nameLower = name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-  for (const [key, rank] of Object.entries(OWGR_RANKINGS)) {
-    const keyLower = key.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-    if (keyLower === nameLower) return rank;
+// ============================================================
+// FEDEX CUP STANDINGS — source of truth for PLAYOFF event fields
+// Updated Aug 10, 2026 from pgatour.com/fedexcup (post-Wyndham).
+// The playoff field IS the top N of this list:
+//   Event 13 FedEx St. Jude = top 70
+//   Event 14 BMW Championship = top 50 (after St. Jude)
+//   Event 15 Tour Championship = top 30 (after BMW)
+// IMPORTANT: refresh this table after each playoff event completes.
+// ============================================================
+const FEDEX_CUP_RANKINGS = {
+  'Scottie Scheffler':1,'Matt Fitzpatrick':2,'Cameron Young':3,'Wyndham Clark':4,
+  'Chris Gotterup':5,'Collin Morikawa':6,'Si Woo Kim':7,'Sam Burns':8,
+  'Tommy Fleetwood':9,'Ludvig Åberg':10,'Xander Schauffele':11,'Rory McIlroy':12,
+  'Jacob Bridgeman':13,'Akshay Bhatia':14,'Russell Henley':15,'Ryan Gerard':16,
+  'Min Woo Lee':17,'Kristoffer Reitan':18,'Alex Fitzpatrick':19,'Hideki Matsuyama':20,
+  'J.J. Spaun':21,'Ryan Fox':22,'Viktor Hovland':23,'Justin Rose':24,
+  'Alex Smalley':25,'Tom Kim':26,'Gary Woodland':27,'Rickie Fowler':28,
+  'Adam Scott':29,'J.T. Poston':30,'Robert MacIntyre':31,'Nicolai Højgaard':32,
+  'Kurt Kitayama':33,'Bud Cauley':34,'Aaron Rai':35,'Ben Griffin':36,
+  'Sepp Straka':37,'Michael Thorbjornsen':38,'Justin Thomas':39,'Jake Knapp':40,
+  'Nico Echavarria':41,'Patrick Cantlay':42,'Ryo Hisatsune':43,'Sahith Theegala':44,
+  'Eric Cole':45,'Alex Noren':46,'Michael Brennan':47,'Matt McCarty':48,
+  'Keith Mitchell':49,'Maverick McNealy':50,'Harris English':51,'Max Homa':52,
+  'Sungjae Im':53,'Jordan Spieth':54,'Sam Stevens':55,'Pierceson Coody':56,
+  'Sudarshan Yellamaraju':57,'Harry Hall':58,'Corey Conners':59,'Daniel Berger':60,
+  'Michael Kim':61,'Shane Lowry':62,'Nick Taylor':63,'Jordan Smith':64,
+  'Brian Harman':65,'Patrick Rodgers':66,'Aldrich Potgieter':67,'Ricky Castillo':68,
+  'Matti Schmid':69,'Jackson Koivun':70
+};
+
+// How many FedEx Cup players qualify for each playoff event
+const PLAYOFF_FIELD_SIZE = { 13: 70, 14: 50, 15: 30 };
+
+function normalizeName(n) {
+  return (n || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z]/g, '');
+}
+
+function lookupRank(table, name) {
+  if (table[name]) return table[name];
+  const target = normalizeName(name);
+  for (const key in table) {
+    if (normalizeName(key) === target) return table[key];
   }
-  return 999; // Unranked — bottom of tiers
+  return null;
+}
+
+function getOWGR(name) {
+  return lookupRank(OWGR_RANKINGS, name) || 999; // Unranked — bottom of tiers
+}
+
+// Build the playoff field directly from FedEx Cup standings (top N).
+// This is authoritative — ESPN's leaderboard API cannot be used because it
+// returns the most recent/current tournament, not the upcoming one.
+function getFedExPlayoffField(eventId) {
+  const size = PLAYOFF_FIELD_SIZE[eventId];
+  if (!size) return null;
+  const golfers = Object.keys(FEDEX_CUP_RANKINGS)
+    .map(name => ({ name, rank: FEDEX_CUP_RANKINGS[name], owgr: getOWGR(name) }))
+    .filter(g => g.rank <= size)
+    .sort((a, b) => a.rank - b.rank);
+  return golfers.length ? { eventName: 'FedEx Cup Playoffs', golfers, rankLabel: 'FedEx' } : null;
 }
 
 async function fetchESPNField() {
@@ -1747,12 +1798,29 @@ async function fetchESPNField() {
 
     return {
       eventName: ev.name || ev.shortName || 'PGA Tour Event',
-      golfers
+      golfers,
+      rankLabel: 'OWGR'
     };
   } catch (err) {
     console.log('ESPN field fetch failed:', err.message);
     return null;
   }
+}
+
+// ESPN's leaderboard endpoint returns whatever tournament is current/most recent,
+// NOT the one we're taking picks for. Verify the names roughly match before trusting it.
+function espnFieldMatchesEvent(espnField, eventDef) {
+  if (!espnField || !eventDef) return false;
+  const a = normalizeName(espnField.eventName);
+  const b = normalizeName(eventDef.name);
+  if (!a || !b) return false;
+  if (a === b || a.includes(b) || b.includes(a)) return true;
+  // Compare significant word overlap (e.g. "championship" alone isn't enough)
+  const stop = ['championship', 'tournament', 'the', 'classic', 'open', 'invitational'];
+  const words = s => (s.match(/[a-z]+/g) || []).filter(w => w.length > 3 && !stop.includes(w));
+  const wa = words(espnField.eventName.toLowerCase());
+  const wb = words(eventDef.name.toLowerCase());
+  return wa.some(w => wb.includes(w));
 }
 
 // ============================================================
@@ -1762,26 +1830,52 @@ const NEW_TIER_START = 13; // First event using new tier structure
 const NEW_TIER_PICKS = [3, 2, 1, 1, 1]; // picks per tier
 const OLD_TIER_PICKS = [1, 2, 2, 2, 1]; // picks per tier
 const TIER_NAMES = ['Tier 1 — Favorites', 'Tier 2 — Contenders', 'Tier 3 — Mid-Range', 'Tier 4 — Dark Horses', 'Tier 5 — Longshots'];
-// Tier split thresholds: how many golfers from a sorted field go into each tier
-const TIER_SPLITS = [15, 20, 30, 35]; // T1=top 15, T2=next 20, T3=next 30, T4=next 35, T5=rest
+// Proportional tier sizes (fraction of field). T5 gets the remainder.
+// Proportional (not fixed counts) so a 70-man playoff field and a 156-man
+// major field both produce five populated tiers.
+const TIER_FRACTIONS = [0.15, 0.20, 0.25, 0.20];
 
 function getTierPicks(eventId) {
   return eventId >= NEW_TIER_START ? NEW_TIER_PICKS : OLD_TIER_PICKS;
 }
 
-// Auto-generate 5-tier field from a flat golfer list (sorted by world ranking)
-function autoGenerateTiers(golfers, eventId) {
+// Auto-generate a 5-tier field from a golfer list already sorted best-first.
+// rankLabel is 'FedEx' for playoff events, 'OWGR' otherwise.
+function autoGenerateTiers(golfers, eventId, rankLabel) {
   const tierPicks = getTierPicks(eventId);
   const total = golfers.length;
+  const label = rankLabel || 'OWGR';
+
+  const describe = g => {
+    if (label === 'FedEx') {
+      const extra = g.owgr && g.owgr <= 200 ? ' · OWGR #' + g.owgr : '';
+      return { name: g.name, odds: 'FedEx #' + g.rank + extra };
+    }
+    return { name: g.name, odds: g.rank <= 200 ? 'OWGR #' + g.rank : 'Unranked' };
+  };
+
+  // Size each tier proportionally, but never smaller than its pick requirement,
+  // and always leave enough players behind for the remaining tiers.
+  const sizes = [];
+  let assigned = 0;
+  TIER_FRACTIONS.forEach((frac, i) => {
+    const minNeededLater = tierPicks.slice(i + 1).reduce((a, b) => a + b, 0);
+    const available = total - assigned - minNeededLater;
+    let size = Math.max(tierPicks[i], Math.round(total * frac));
+    size = Math.max(tierPicks[i], Math.min(size, available));
+    sizes.push(size);
+    assigned += size;
+  });
+
   let idx = 0;
   const tiers = [];
-  TIER_SPLITS.forEach((size, i) => {
+  sizes.forEach((size, i) => {
     const end = Math.min(idx + size, total);
     tiers.push({
       tier: i + 1,
       name: TIER_NAMES[i],
       picks: tierPicks[i],
-      players: golfers.slice(idx, end).map(g => ({ name: g.name, odds: g.rank <= 200 ? 'OWGR #' + g.rank : 'Unranked' }))
+      players: golfers.slice(idx, end).map(describe)
     });
     idx = end;
   });
@@ -1790,24 +1884,38 @@ function autoGenerateTiers(golfers, eventId) {
     tier: 5,
     name: TIER_NAMES[4],
     picks: tierPicks[4],
-    players: golfers.slice(idx).map(g => ({ name: g.name, odds: g.rank <= 200 ? 'OWGR #' + g.rank : 'Unranked' }))
+    players: golfers.slice(idx).map(describe)
   });
   return { format: 'full', tiers };
 }
 
-// On picks render: hardcoded → ESPN auto-tiers → null
+// On picks render: hardcoded → FedEx Cup (playoffs) → ESPN auto-tiers → null
 async function getFieldForEvent(eventId) {
   // Check hardcoded first (instant, reliable)
   if (EVENT_FIELDS[eventId]) return EVENT_FIELDS[eventId];
 
-  // Try ESPN API — auto-generate tiers for Majors/Playoffs, flat list for Signatures
   const evDef = SEASON_EVENTS.find(e => e.id === eventId);
   const isFullDraft = evDef && evDef.type !== 'SIGNATURE';
-  const espnField = await fetchESPNField();
 
+  // PLAYOFF events: the field IS the FedEx Cup top N. Authoritative — do not use ESPN,
+  // which returns the current/most-recent tournament rather than the upcoming one.
+  if (evDef && evDef.type === 'PLAYOFF') {
+    const fedexField = getFedExPlayoffField(eventId);
+    if (fedexField) {
+      return autoGenerateTiers(fedexField.golfers, eventId, 'FedEx');
+    }
+  }
+
+  // Other events: try ESPN, but only if it's actually reporting the event we want.
+  const espnField = await fetchESPNField();
   if (espnField && espnField.golfers.length > 0) {
+    if (!espnFieldMatchesEvent(espnField, evDef)) {
+      console.log('ESPN returned "' + espnField.eventName + '" but we need "' +
+                  (evDef ? evDef.name : '?') + '" — ignoring stale field data.');
+      return null;
+    }
     if (isFullDraft) {
-      return autoGenerateTiers(espnField.golfers, eventId);
+      return autoGenerateTiers(espnField.golfers, eventId, 'OWGR');
     }
     return { format: 'quick', golfers: espnField.golfers };
   }
