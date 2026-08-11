@@ -611,7 +611,7 @@ svg.inline-icon.icon-dark { stroke: var(--pga-dark); }
 /* Player card grid for picks */
 .player-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
   gap: 0.4rem;
 }
 .player-card {
@@ -657,18 +657,35 @@ svg.inline-icon.icon-dark { stroke: var(--pga-dark); }
   border-color: var(--gold);
   color: var(--pga-deeper);
 }
+/* Name and rank stack vertically so the rank can never push the name
+   off the card — each gets the full available width on its own line. */
+.pc-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
 .pc-name {
   font-weight: 500;
   font-size: 0.75rem;
   line-height: 1.2;
-  flex: 1;
-}
-.pc-rank {
-  font-size: 0.62rem;
-  font-weight: 600;
-  color: var(--text-light);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
+.pc-rank {
+  font-size: 0.58rem;
+  font-weight: 600;
+  color: var(--text-light);
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-rank:empty { display: none; }
 .player-card.selected .pc-rank { color: var(--gold-light); }
 .tier-section {
   margin-bottom: 0.75rem;
@@ -1043,6 +1060,7 @@ svg.inline-icon.icon-dark { stroke: var(--pga-dark); }
   .player-grid { grid-template-columns: 1fr 1fr; }
   .player-card { padding: 0.4rem 0.5rem; }
   .pc-name { font-size: 0.68rem; }
+  .pc-rank { font-size: 0.54rem; }
 }
 </style>
 </head>
@@ -1846,10 +1864,15 @@ function autoGenerateTiers(golfers, eventId, rankLabel) {
   const total = golfers.length;
   const label = rankLabel || 'OWGR';
 
+  // odds = primary rank badge, odds2 = optional secondary line beneath it.
+  // Kept as two short strings so neither overflows the card.
   const describe = g => {
     if (label === 'FedEx') {
-      const extra = g.owgr && g.owgr <= 200 ? ' · OWGR #' + g.owgr : '';
-      return { name: g.name, odds: 'FedEx #' + g.rank + extra };
+      return {
+        name: g.name,
+        odds: 'FedEx #' + g.rank,
+        odds2: (g.owgr && g.owgr <= 200) ? 'OWGR #' + g.owgr : null
+      };
     }
     return { name: g.name, odds: g.rank <= 200 ? 'OWGR #' + g.rank : 'Unranked' };
   };
@@ -2727,10 +2750,12 @@ async function renderPicks() {
           </div>
           <div class="player-grid">
             ${field.golfers.map(g => `
-              <div class="player-card" data-golfer="${g.name}" onclick="toggleQuickPick('${g.name.replace(/'/g, "\\'")}')">
+              <div class="player-card" data-golfer="${g.name}" title="${g.name}" onclick="toggleQuickPick('${g.name.replace(/'/g, "\\'")}')">
                 <div class="pc-check"></div>
-                <div class="pc-name">${g.name}</div>
-                <div class="pc-rank">#${g.rank}</div>
+                <div class="pc-body">
+                  <div class="pc-name">${g.name}</div>
+                  <div class="pc-rank">${g.rank && g.rank <= 200 ? 'OWGR #' + g.rank : ''}</div>
+                </div>
               </div>
             `).join('')}
           </div>
@@ -2762,11 +2787,13 @@ async function renderPicks() {
           </div>
           <div class="player-grid">
             ${tier.players.map(g => `
-              <div class="player-card" data-tier="${tier.tier}" data-golfer="${g.name}"
+              <div class="player-card" data-tier="${tier.tier}" data-golfer="${g.name}" title="${g.name}${g.odds ? ' — ' + g.odds : ''}${g.odds2 ? ' · ' + g.odds2 : ''}"
                    onclick="toggleTierPick(${tier.tier}, '${g.name.replace(/'/g, "\\'")}', ${tier.picks})">
                 <div class="pc-check"></div>
-                <div class="pc-name">${g.name}</div>
-                <div class="pc-rank">${g.odds || ''}</div>
+                <div class="pc-body">
+                  <div class="pc-name">${g.name}</div>
+                  <div class="pc-rank">${[g.odds, g.odds2].filter(Boolean).join(' · ')}</div>
+                </div>
               </div>
             `).join('')}
           </div>
