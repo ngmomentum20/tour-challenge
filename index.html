@@ -1652,6 +1652,77 @@ const EVENT_FIELDS = {
 // ============================================================
 const ESPN_GOLF_API = 'https://site.api.espn.com/apis/site/v2/sports/golf/leaderboard';
 
+// OWGR World Rankings lookup (updated Aug 10, 2026 from ESPN/OWGR)
+// ESPN leaderboard API does NOT include world rankings, so we maintain this table.
+// To update: visit espn.com/golf/rankings and refresh this object.
+const OWGR_RANKINGS = {
+  'Scottie Scheffler':1,'Rory McIlroy':2,'Cameron Young':3,'Matt Fitzpatrick':4,
+  'Russell Henley':5,'Tommy Fleetwood':6,'Chris Gotterup':7,'Wyndham Clark':8,
+  'Xander Schauffele':9,'Collin Morikawa':10,'Sam Burns':11,'Justin Rose':12,
+  'Jon Rahm':13,'Viktor Hovland':14,'J.J. Spaun':15,'Ludvig Åberg':16,
+  'Robert MacIntyre':17,'Si Woo Kim':18,'Aaron Rai':19,'Ben Griffin':20,
+  'Tyrrell Hatton':21,'Ryan Fox':22,'Justin Thomas':23,'Hideki Matsuyama':24,
+  'Ryan Gerard':25,'Alex Noren':26,'Min Woo Lee':27,'Kristoffer Reitan':28,
+  'Sepp Straka':29,'Tom Kim':30,'Jacob Bridgeman':31,'Patrick Reed':32,
+  'Akshay Bhatia':33,'Bryson DeChambeau':34,'Michael Brennan':35,'J.T. Poston':36,
+  'Kurt Kitayama':37,'Harris English':38,'Michael Thorbjornsen':39,'Nicolai Højgaard':40,
+  'Patrick Cantlay':41,'Joaquín Niemann':42,'Bud Cauley':43,'Rickie Fowler':44,
+  'Gary Woodland':45,'Alex Smalley':46,'Maverick McNealy':47,'Keegan Bradley':48,
+  'Lucas Herbert':49,'Jake Knapp':50,'Shane Lowry':51,'Corey Conners':52,
+  'Marco Penge':53,'Adam Scott':54,'Daniel Berger':55,'Nico Echavarria':56,
+  'Jordan Spieth':57,'Sam Stevens':58,'Michael Kim':59,'Matt Wallace':60,
+  'Brian Harman':61,'Jason Day':62,'Eugenio Chacarra':63,'Pierceson Coody':64,
+  'Johnny Keefer':65,'Ryo Hisatsune':66,'Casey Jarvis':67,'Alex Fitzpatrick':68,
+  'Jackson Koivun':69,'Matt McCarty':70,'Andrew Novak':71,'Jordan Smith':72,
+  'Sungjae Im':73,'Keith Mitchell':74,'Eric Cole':75,'David Puig':76,
+  'Harry Hall':77,'Nick Taylor':78,'Rasmus Højgaard':79,'Max Homa':80,
+  'Rasmus Neergaard-Petersen':81,'Sami Välimäki':82,'Matti Schmid':83,
+  'Sahith Theegala':84,'Steven Fisk':85,'Mac Meissner':86,'Max Greyserman':87,
+  'Thomas Detry':88,'Aldrich Potgieter':89,'Denny McCarthy':90,
+  'Jayden Schaper':91,'Beau Hossler':92,'John Parry':93,'Kevin Yu':94,
+  'Keita Nakajima':95,'Ricky Castillo':96,'Christiaan Bezuidenhout':97,
+  'Taylor Pendrith':98,'Shaun Norris':99,'Andrew Putnam':100,
+  'Blades Brown':101,'Emiliano Grillo':102,'Lucas Glover':103,'Rico Hoey':104,
+  'Patrick Rodgers':105,'Ben Kohles':106,'Jackson Suber':107,
+  'Sudarshan Yellamaraju':108,'Stephan Jaeger':109,'Doc Redman':110,
+  'Austin Smotherman':111,'Kevin Roy':112,'Chris Kirk':113,'Davis Thompson':114,
+  'Kota Kaneko':115,'Max McGreevy':116,'Brooks Koepka':117,'Daniel Hillier':118,
+  'Haotong Li':119,'Garrick Higgo':120,'Davis Riley':121,'David Lipsky':122,
+  'Tom Hoge':123,'Hennie Du Plessis':124,'Oliver Lindell':125,'Angel Ayora':126,
+  'Chandler Blanchet':127,'Brandt Snedeker':128,'Chandler Phillips':129,
+  'Cameron Smith':130,'Lee Hodges':131,'Daniel Brown':132,'Ross Steelman':133,
+  'Josele Ballester':134,'Andy Sullivan':135,'Elvis Smylie':136,
+  'Richard Sterne':137,'William Mouw':138,'Tony Finau':139,'Adrien Saddier':140,
+  'Mark Hubbard':141,'Scott Vincent':142,'Mikael Lindberg':143,'Tom McKibbin':144,
+  'Jacob Skov Olesen':145,'Zach Bauchou':146,'Zac Blair':147,'Doug Ghim':148,
+  'Mackenzie Hughes':149,'Calum Hill':150,'Nacho Elvira':151,'Ian Holt':152,
+  'Billy Horschel':153,'Laurie Canter':154,'Cole Sherwood':155,'Brian Campbell':156,
+  'Thorbjørn Olesen':157,'JC Ritchie':158,'Taylor Moore':159,'Michael Hollick':160,
+  'Victor Perez':161,'Alistair Docherty':162,'Marcus Armitage':163,'S.H. Kim':164,
+  'Travis Smyth':165,'Bernd Wiesberger':166,'Ben James':167,'Carlos Ortiz':168,
+  'Dan Bradbury':169,'Tommy Morrison':170,'Davis Bryant':171,'Davis Lamb':172,
+  'Dylan Menante':173,'Jesper Svensson':174,'Takumi Kanaya':175,
+  'Joakim Lagergren':176,'Sergio García':177,'Jeremy Gandon':178,
+  'Thriston Lawrence':179,'Jhonattan Vegas':180,'Martin Couvra':181,
+  'Kazuki Higa':182,'Adrien Dumont de Chassart':183,'Austin Eckroat':184,
+  'Matt Kuchar':185,'Chad Ramey':186,'Jorge Campillo':187,'Kristoffer Ventura':188,
+  'Vince Whaley':189,'A.J. Ewart':190,'Carson Young':191,'Zecheng Dou':192,
+  'Adam Schenk':193,'Séamus Power':194,'Abraham Ancer':195,'Byeong Hun An':196,
+  'Peter Uihlein':197,'Joe Highsmith':197,'Dean Burmester':199,'Erik van Rooyen':200
+};
+
+function getOWGR(name) {
+  // Direct match first
+  if (OWGR_RANKINGS[name]) return OWGR_RANKINGS[name];
+  // Try case-insensitive / accent-insensitive fuzzy match
+  const nameLower = name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  for (const [key, rank] of Object.entries(OWGR_RANKINGS)) {
+    const keyLower = key.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (keyLower === nameLower) return rank;
+  }
+  return 999; // Unranked — bottom of tiers
+}
+
 async function fetchESPNField() {
   try {
     const resp = await fetch(ESPN_GOLF_API);
@@ -1666,12 +1737,12 @@ async function fetchESPNField() {
     const golfers = comp.competitors.map((c, i) => {
       const athlete = c.athlete || {};
       const name = athlete.displayName || athlete.fullName || 'Unknown';
-      // Use world ranking if available, otherwise field position
-      const rank = athlete.rank || (i + 1);
-      return { name, rank: parseInt(rank) || (i + 1) };
+      // Use OWGR lookup table for world ranking (ESPN API doesn't provide rankings)
+      const rank = getOWGR(name);
+      return { name, rank };
     });
 
-    // Sort by rank
+    // Sort by OWGR world ranking
     golfers.sort((a, b) => a.rank - b.rank);
 
     return {
@@ -1710,7 +1781,7 @@ function autoGenerateTiers(golfers, eventId) {
       tier: i + 1,
       name: TIER_NAMES[i],
       picks: tierPicks[i],
-      players: golfers.slice(idx, end).map(g => ({ name: g.name, odds: 'Rank ' + g.rank }))
+      players: golfers.slice(idx, end).map(g => ({ name: g.name, odds: g.rank <= 200 ? 'OWGR #' + g.rank : 'Unranked' }))
     });
     idx = end;
   });
@@ -1719,7 +1790,7 @@ function autoGenerateTiers(golfers, eventId) {
     tier: 5,
     name: TIER_NAMES[4],
     picks: tierPicks[4],
-    players: golfers.slice(idx).map(g => ({ name: g.name, odds: 'Rank ' + g.rank }))
+    players: golfers.slice(idx).map(g => ({ name: g.name, odds: g.rank <= 200 ? 'OWGR #' + g.rank : 'Unranked' }))
   });
   return { format: 'full', tiers };
 }
