@@ -3005,12 +3005,11 @@ async function loadMyPicks() {
             tierSelections[tierIdx + 1].push(flatPicks[pickIdx]);
           }
         });
-        // Re-render all tier card states
-        const evField = EVENT_FIELDS[ACTIVE_EVENT.eventId];
-        const fieldTiers = evField?.tiers || document.querySelectorAll('[data-tier-picks]');
-        if (evField && evField.tiers) {
-          evField.tiers.forEach(t => updateTierCards(t.tier, t.picks));
-        }
+        // Re-render all tier card states so saved picks appear selected.
+        // Must NOT depend on EVENT_FIELDS: auto-generated fields (the FedEx Cup
+        // playoff events 13-15, and ESPN-sourced majors) have no hardcoded entry,
+        // so gating on it left loaded picks invisible on the page.
+        tierPicks.forEach((count, tierIdx) => updateTierCards(tierIdx + 1, count));
         updateFullDraftSubmitState();
       }
       if (entry.tbScore) document.getElementById('tbScore') && (document.getElementById('tbScore').value = entry.tbScore);
