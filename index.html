@@ -3751,7 +3751,7 @@ function scoreEvent(picksEntries, espnData, eventType, eventId) {
 }
 
 // POST results to Google Sheet via Apps Script
-async function saveResultsToSheet(eventId, results) {
+async function saveResultsToSheet(eventId, results, replace) {
   try {
     // Include golfer details as JSON for history scoring breakdown
     const resultsWithDetails = results.map(r => ({
@@ -3766,7 +3766,8 @@ async function saveResultsToSheet(eventId, results) {
       body: JSON.stringify({
         action: 'saveResults',
         eventId: eventId,
-        results: resultsWithDetails
+        results: resultsWithDetails,
+        replace: !!replace
       })
     });
     const data = await resp.json();
@@ -3804,6 +3805,14 @@ async function autoFinalizeResults() {
       const espnData = await fetchESPNLeaderboard();
       if (!espnData || !espnData.isComplete) {
         console.log(`Auto-finalize: ESPN data not final for event ${ev.id} (${ev.name}), skipping.`);
+        continue;
+      }
+
+      // CRITICAL: ESPN's leaderboard endpoint returns whatever tournament is
+      // current/most recent — not necessarily the one we're finalizing. Scoring
+      // an event against the wrong leaderboard would silently corrupt results.
+      if (!espnFieldMatchesEvent({ eventName: espnData.name }, ev)) {
+        console.log(`Auto-finalize: ESPN is reporting "${espnData.name}" but event ${ev.id} is "${ev.name}" — refusing to score.`);
         continue;
       }
 
@@ -3889,6 +3898,13 @@ async function finalizeSpecificEvent(ev, statusEl) {
     return;
   }
 
+  // Refuse to score an event against a different tournament's leaderboard.
+  if (!espnFieldMatchesEvent({ eventName: espnData.name }, ev)) {
+    statusEl.innerHTML = '<span style="color:var(--red);">ESPN is currently reporting &ldquo;' + espnData.name +
+      '&rdquo;, not &ldquo;' + ev.name + '&rdquo;. Refusing to score to avoid corrupting results.</span>';
+    return;
+  }
+
   statusEl.textContent = 'Scoring entries...';
   const results = scoreEvent(picksResp.entries, espnData, ev.type, ev.id);
   if (!results) {
@@ -3905,7 +3921,23 @@ async function finalizeSpecificEvent(ev, statusEl) {
     // Re-render the page with new results
     renderHub();
   } else if (saveResult.alreadyExists) {
-    statusEl.innerHTML = '<span style="color:var(--gold);">Results already saved for this event.</span>';
+    // Offer an explicit re-score (e.g. someone's picks were added late).
+    const ok = confirm('Results already exist for ' + ev.name + '.\n\nRe-score and REPLACE them with the current picks and final leaderboard?');
+    if (!ok) {
+      statusEl.innerHTML = '<span style="color:var(--gold);">Left existing results unchanged.</span>';
+      return;
+    }
+    statusEl.textContent = 'Replacing results...';
+    const redo = await saveResultsToSheet(ev.id, results, true);
+    if (redo.success) {
+      const i = COMPLETED_EVENTS.findIndex(e => e.eventId === ev.id);
+      if (i >= 0) COMPLETED_EVENTS[i] = { eventId: ev.id, results };
+      else COMPLETED_EVENTS.push({ eventId: ev.id, results });
+      statusEl.innerHTML = '<span style="color:var(--green);">Done! ' + redo.message + '</span>';
+      renderHub();
+    } else {
+      statusEl.textContent = 'Replace failed: ' + (redo.error || 'Unknown error');
+    }
   } else {
     statusEl.textContent = 'Save failed: ' + (saveResult.error || 'Unknown error');
   }
